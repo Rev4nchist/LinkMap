@@ -1,17 +1,328 @@
-import { MSG, STORAGE_KEY } from './shared/constants.js';
+/**
+ * LinkMap — Background Service Worker
+ *
+ * Owns the ShadowState, listens to Chrome tab events,
+ * persists state to chrome.storage.local, and communicates
+ * with the side panel via chrome.runtime messaging.
+ */
 
-console.log('[LinkMap] Background service worker started');
+import { ShadowState } from './shared/shadow-state.js';
+import { MSG, STORAGE_KEY, SAVE_DEBOUNCE_MS } from './shared/constants.js';
+import { debounce } from './shared/utils.js';
 
-// Open side panel when extension icon is clicked
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
 
-// Placeholder: message handler
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[LinkMap] Message received:', message.type);
+/** @type {ShadowState} */
+let state = new ShadowState();
 
-  if (message.type === MSG.GET_STATE) {
-    sendResponse({ tabs: [], rootIds: [], collapsed: [], groupColors: {}, theme: 'midnight' });
+/** @type {number|null} Currently active tab ID */
+let activeTabId = null;
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Debounced save — writes the serialized ShadowState to chrome.storage.local.
+ * Called after every state mutation.
+ */
+const saveState = debounce(() => {
+  chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() });
+  console.log('[LinkMap] State saved');
+}, SAVE_DEBOUNCE_MS);
+
+// ---------------------------------------------------------------------------
+// Broadcasting
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the state payload sent to the side panel.
+ * Converts Maps and Sets to JSON-friendly formats.
+ *
+ * @returns {Object} State payload for messaging.
+ */
+function getStatePayload() {
+  return {
+    tabs: Object.fromEntries(state.tabs),
+    rootIds: state.rootIds,
+    collapsed: [...state.collapsed],
+    groupColors: state.groupColors,
+    theme: state.theme,
+    activeTabId: activeTabId,
+  };
+}
+
+/**
+ * Sends a STATE_UPDATE message to the side panel.
+ * Silently catches errors when the side panel is not open.
+ */
+function broadcastState() {
+  try {
+    chrome.runtime.sendMessage({
+      type: MSG.STATE_UPDATE,
+      payload: getStatePayload(),
+    }).catch(() => {
+      // Side panel not open — expected, ignore.
+    });
+  } catch (_e) {
+    // Synchronous throw — side panel not open.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+/**
+ * Initializes the service worker:
+ * 1. Loads saved state from chrome.storage.local
+ * 2. Reconstructs ShadowState from storage
+ * 3. Reconciles with live Chrome tabs
+ * 4. Identifies the active tab
+ * 5. Persists the reconciled state
+ */
+async function init() {
+  try {
+    // 1. Load saved state
+    const result = await chrome.storage.local.get(STORAGE_KEY);
+    const savedData = result[STORAGE_KEY];
+
+    // 2. Reconstruct from storage
+    if (savedData) {
+      state = ShadowState.fromStorage(savedData);
+    }
+
+    // 3. Query all live tabs and reconcile
+    const liveTabs = await chrome.tabs.query({});
+    state.reconcileWithLiveTabs(liveTabs);
+
+    // 4. Identify the active tab
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTabs.length > 0) {
+      activeTabId = activeTabs[0].id;
+    }
+
+    // 5. Save reconciled state
+    saveState();
+
+    console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs`);
+  } catch (err) {
+    console.error('[LinkMap] Init error:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tab Event Listeners
+// ---------------------------------------------------------------------------
+
+/** @type {Set<string>} Fields in changeInfo that trigger an update. */
+const RELEVANT_CHANGE_FIELDS = new Set([
+  'title', 'url', 'favIconUrl', 'status', 'pinned', 'audible',
+]);
+
+/**
+ * chrome.tabs.onCreated — A new tab was created.
+ */
+chrome.tabs.onCreated.addListener((tab) => {
+  const node = {
+    tabId: tab.id,
+    parentId: tab.openerTabId || null,
+    title: tab.title || 'New Tab',
+    url: tab.url || '',
+    favIconUrl: tab.favIconUrl || '',
+    pinned: tab.pendingUrl ? false : tab.pinned,
+    audible: false,
+    status: tab.status || 'loading',
+    groupId: tab.groupId || -1,
+    index: tab.index,
+    windowId: tab.windowId,
+  };
+
+  state.addTab(tab.id, node);
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Tab created: ${tab.id} "${node.title}"`);
+});
+
+/**
+ * chrome.tabs.onRemoved — A tab was closed.
+ */
+chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
+  state.removeTab(tabId);
+
+  if (activeTabId === tabId) {
+    activeTabId = null;
   }
 
-  return true; // keep channel open for async responses
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Tab removed: ${tabId}`);
 });
+
+/**
+ * chrome.tabs.onUpdated — A tab's properties changed.
+ * Only processes updates with relevant fields.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
+  // Filter: only act on relevant changes
+  const hasRelevant = Object.keys(changeInfo).some((key) =>
+    RELEVANT_CHANGE_FIELDS.has(key)
+  );
+  if (!hasRelevant) return;
+
+  const changes = {};
+  if ('title' in changeInfo) changes.title = changeInfo.title;
+  if ('url' in changeInfo) changes.url = changeInfo.url;
+  if ('favIconUrl' in changeInfo) changes.favIconUrl = changeInfo.favIconUrl;
+  if ('status' in changeInfo) changes.status = changeInfo.status;
+  if ('pinned' in changeInfo) changes.pinned = changeInfo.pinned;
+  if ('audible' in changeInfo) changes.audible = changeInfo.audible;
+
+  state.updateTab(tabId, changes);
+  saveState();
+  broadcastState();
+});
+
+/**
+ * chrome.tabs.onMoved — A tab was moved in the tab strip.
+ */
+chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
+  state.updateTab(tabId, { index: moveInfo.toIndex });
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Tab moved: ${tabId} to index ${moveInfo.toIndex}`);
+});
+
+/**
+ * chrome.tabs.onActivated — The active tab changed.
+ */
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  activeTabId = activeInfo.tabId;
+
+  try {
+    chrome.runtime.sendMessage({
+      type: MSG.TAB_ACTIVATED,
+      payload: { tabId: activeInfo.tabId },
+    }).catch(() => {});
+  } catch (_e) {
+    // Side panel not open.
+  }
+
+  console.log(`[LinkMap] Tab activated: ${activeInfo.tabId}`);
+});
+
+/**
+ * chrome.tabs.onAttached — A tab was attached to a window.
+ */
+chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+  state.updateTab(tabId, {
+    windowId: attachInfo.newWindowId,
+    index: attachInfo.newPosition,
+  });
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Tab attached: ${tabId} to window ${attachInfo.newWindowId}`);
+});
+
+/**
+ * chrome.tabs.onDetached — A tab was detached from a window.
+ * v1: Single-window focus — just log it, don't remove the tab.
+ */
+chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
+  console.log(`[LinkMap] Tab detached: ${tabId} from window ${detachInfo.oldWindowId}`);
+  saveState();
+});
+
+// ---------------------------------------------------------------------------
+// Message Handler
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const { type, payload } = message;
+
+  switch (type) {
+    case MSG.GET_STATE:
+      sendResponse(getStatePayload());
+      break;
+
+    case MSG.ACTIVATE_TAB:
+      chrome.tabs.update(payload.tabId, { active: true });
+      break;
+
+    case MSG.CLOSE_TAB:
+      chrome.tabs.remove(payload.tabId);
+      break;
+
+    case MSG.CLOSE_TABS:
+      chrome.tabs.remove(payload.tabIds);
+      break;
+
+    case MSG.MOVE_TAB:
+      state.moveTab(payload.tabId, payload.newParentId, payload.index);
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.TOGGLE_COLLAPSE:
+      state.toggleCollapse(payload.tabId);
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.SET_THEME:
+      state.setTheme(payload.theme);
+      saveState();
+      try {
+        chrome.runtime.sendMessage({
+          type: MSG.THEME_CHANGED,
+          payload: { theme: payload.theme },
+        }).catch(() => {});
+      } catch (_e) {
+        // Side panel not open.
+      }
+      break;
+
+    case MSG.SET_GROUP_COLOR:
+      state.setGroupColor(payload.groupId, payload.color);
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.PIN_TAB:
+      chrome.tabs.update(payload.tabId, { pinned: payload.pinned });
+      break;
+
+    case MSG.DUPLICATE_TAB:
+      chrome.tabs.duplicate(payload.tabId);
+      break;
+
+    case MSG.MUTE_TAB:
+      chrome.tabs.update(payload.tabId, { muted: payload.muted });
+      break;
+
+    default:
+      console.log(`[LinkMap] Unknown message type: ${type}`);
+  }
+
+  return true; // Keep channel open for async responses
+});
+
+// ---------------------------------------------------------------------------
+// Side Panel Behavior
+// ---------------------------------------------------------------------------
+
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+init();
+
+console.log('[LinkMap] Background service worker started');

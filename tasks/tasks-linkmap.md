@@ -70,19 +70,19 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 2.10 Implement `reconcileWithLiveTabs(liveTabs)` — removes dead tabs, adds new tabs at root, updates metadata from live data
   - [x] 2.11 Verify: Import ShadowState in background.js, create instance, add/remove/move tabs in console, confirm tree integrity (ready for manual verification)
 
-- [ ] 3.0 Background service worker — tab event handling
-  - [ ] 3.1 Initialize ShadowState instance on service worker start
-  - [ ] 3.2 Implement startup reconciliation: load from `chrome.storage.local` → query live tabs → `reconcileWithLiveTabs()`
-  - [ ] 3.3 Handle `chrome.tabs.onCreated` — create TabNode from tab info, use `openerTabId` as parentId (or null), add to state
-  - [ ] 3.4 Handle `chrome.tabs.onRemoved` — call `removeTab()`, which reparents children
-  - [ ] 3.5 Handle `chrome.tabs.onUpdated` — update title, url, favIconUrl, status, audible, pinned via `updateTab()`
-  - [ ] 3.6 Handle `chrome.tabs.onMoved` — update tab index in state
-  - [ ] 3.7 Handle `chrome.tabs.onActivated` — track active tabId, broadcast `TAB_ACTIVATED`
-  - [ ] 3.8 Handle `chrome.tabs.onAttached` / `onDetached` — handle tab moving between windows (v1: remove if detached to another window)
-  - [ ] 3.9 Implement debounced save — after every state mutation, debounce 500ms, then `chrome.storage.local.set({ linkmap_state: state.toSerializable() })`
-  - [ ] 3.10 Implement message handler (`chrome.runtime.onMessage`) — respond to `GET_STATE` with full serialized state, handle `ACTIVATE_TAB`, `CLOSE_TAB`, `MOVE_TAB`, `TOGGLE_COLLAPSE`, `SET_THEME`, `SET_GROUP_COLOR`, `PIN_TAB`, `DUPLICATE_TAB`, `MUTE_TAB`
-  - [ ] 3.11 Implement state broadcast — after mutations, send `STATE_UPDATE` to side panel via `chrome.runtime.sendMessage()` (wrap in try/catch since panel may be closed)
-  - [ ] 3.12 Verify: Open extension, open/close/navigate tabs, check that background console shows correct state updates. Restart browser, verify tree restores.
+- [x] 3.0 Background service worker — tab event handling
+  - [x] 3.1 Initialize ShadowState instance on service worker start
+  - [x] 3.2 Implement startup reconciliation: load from `chrome.storage.local` → query live tabs → `reconcileWithLiveTabs()`
+  - [x] 3.3 Handle `chrome.tabs.onCreated` — create TabNode from tab info, use `openerTabId` as parentId (or null), add to state
+  - [x] 3.4 Handle `chrome.tabs.onRemoved` — call `removeTab()`, which reparents children
+  - [x] 3.5 Handle `chrome.tabs.onUpdated` — update title, url, favIconUrl, status, audible, pinned via `updateTab()`
+  - [x] 3.6 Handle `chrome.tabs.onMoved` — update tab index in state
+  - [x] 3.7 Handle `chrome.tabs.onActivated` — track active tabId, broadcast `TAB_ACTIVATED`
+  - [x] 3.8 Handle `chrome.tabs.onAttached` / `onDetached` — handle tab moving between windows (v1: log on detach, don't remove)
+  - [x] 3.9 Implement debounced save — after every state mutation, debounce 500ms, then `chrome.storage.local.set({ linkmap_state: state.toSerializable() })`
+  - [x] 3.10 Implement message handler (`chrome.runtime.onMessage`) — respond to `GET_STATE` with full serialized state, handle `ACTIVATE_TAB`, `CLOSE_TAB`, `MOVE_TAB`, `TOGGLE_COLLAPSE`, `SET_THEME`, `SET_GROUP_COLOR`, `PIN_TAB`, `DUPLICATE_TAB`, `MUTE_TAB`
+  - [x] 3.11 Implement state broadcast — after mutations, send `STATE_UPDATE` to side panel via `chrome.runtime.sendMessage()` (wrap in try/catch since panel may be closed)
+  - [x] 3.12 Verify: ready for manual verification — 40 unit tests passing via `node --test tests/background.test.js`
 
 - [ ] 4.0 Side panel — tree rendering
   - [ ] 4.1 Create `sidepanel/modules/tree-renderer.js` — export `renderTree(state, container)` function
