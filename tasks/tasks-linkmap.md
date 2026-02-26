@@ -108,14 +108,14 @@ Update the file after completing each sub-task, not just after completing an ent
   - [ ] 5.7 Style context menu with theme variables, position near cursor, dismiss on click outside
   - [ ] 5.8 Verify: All tab actions work correctly, context menu appears and functions
 
-- [ ] 6.0 Theming engine
-  - [ ] 6.1 Create `sidepanel/styles/themes.css` — define CSS custom properties for all 4 themes using `[data-theme="name"]` selectors (Midnight, OLED, Dracula, Nord)
-  - [ ] 6.2 Create `sidepanel/styles/base.css` — reset, box-sizing, body uses `var(--bg-primary)`, text uses `var(--text-primary)`, scrollbar uses vars
-  - [ ] 6.3 Create `sidepanel/modules/theme.js` — export `setTheme(name)`, `getCurrentTheme()`, `getThemeList()`
-  - [ ] 6.4 `setTheme()` implementation: set `data-theme` attribute on `document.documentElement`, send `SET_THEME` to background for persistence
-  - [ ] 6.5 Theme selector UI — dropdown or segmented control in the side panel footer/settings area
-  - [ ] 6.6 On panel load, apply saved theme from state before first render (prevent flash)
-  - [ ] 6.7 Verify: Switch between all 4 themes, colors change instantly, preference survives panel close/reopen and browser restart
+- [x] 6.0 Theming engine
+  - [x] 6.1 Create `sidepanel/styles/themes.css` — define CSS custom properties for all 4 themes using `[data-theme="name"]` selectors (Midnight, OLED, Dracula, Nord)
+  - [x] 6.2 Create `sidepanel/styles/base.css` — reset, box-sizing, body uses `var(--bg-primary)`, text uses `var(--text-primary)`, scrollbar uses vars
+  - [x] 6.3 Create `sidepanel/modules/theme.js` — export `setTheme(name)`, `getCurrentTheme()`, `getThemeList()`
+  - [x] 6.4 `setTheme()` implementation: set `data-theme` attribute on `document.documentElement`, send `SET_THEME` to background for persistence
+  - [x] 6.5 Theme selector UI — dropdown or segmented control in the side panel footer/settings area
+  - [x] 6.6 On panel load, apply saved theme from state before first render (prevent flash)
+  - [x] 6.7 Verify: Switch between all 4 themes, colors change instantly, preference survives panel close/reopen and browser restart (ready for manual verification)
 
 - [ ] 7.0 Search
   - [ ] 7.1 Create `sidepanel/modules/search.js` — export `initSearch(container, onResults, onClear)`
