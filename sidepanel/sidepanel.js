@@ -8,6 +8,7 @@
 import { MSG } from '../shared/constants.js';
 import { renderTree } from './modules/tree-renderer.js';
 import { showContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
+import { initSearch } from './modules/search.js';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -26,6 +27,17 @@ const themeSelect = document.getElementById('theme-select');
 
 let currentState = null;
 let currentActiveTabId = null;
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+const search = initSearch(
+  searchInput,
+  treeContainer,
+  () => currentState,
+  () => render()
+);
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -82,6 +94,7 @@ function handleStateUpdate(payload) {
 
 function render() {
   if (!currentState) return;
+  if (search.isActive()) return; // don't overwrite search results
 
   renderTree(currentState, currentActiveTabId, treeContainer, pinnedList);
 

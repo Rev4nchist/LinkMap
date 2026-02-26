@@ -117,15 +117,15 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 6.6 On panel load, apply saved theme from state before first render (prevent flash)
   - [x] 6.7 Verify: Switch between all 4 themes, colors change instantly, preference survives panel close/reopen and browser restart (ready for manual verification)
 
-- [ ] 7.0 Search
-  - [ ] 7.1 Create `sidepanel/modules/search.js` — export `initSearch(container, onResults, onClear)`
-  - [ ] 7.2 Implement fuzzy match function in `shared/utils.js` — match characters in order (not necessarily adjacent), return score and match indices
-  - [ ] 7.3 Search input in header — styled with theme variables, placeholder "Search tabs..."
-  - [ ] 7.4 On input (debounced 150ms), filter all tabs by fuzzy match against title + URL
-  - [ ] 7.5 Render results as flat list (not tree) with match characters highlighted (bold or colored)
-  - [ ] 7.6 Click result → `ACTIVATE_TAB`, clear search, restore tree
-  - [ ] 7.7 Escape key or clear button → restore tree view
-  - [ ] 7.8 Verify: Type partial tab title, matching tabs appear, non-matches hidden, click switches to tab, escape restores tree
+- [x] 7.0 Search
+  - [x] 7.1 Create `sidepanel/modules/search.js` — export `initSearch(container, onResults, onClear)`
+  - [x] 7.2 Implement fuzzy match function in `shared/utils.js` — match characters in order (not necessarily adjacent), return score and match indices
+  - [x] 7.3 Search input in header — styled with theme variables, placeholder "Search tabs..."
+  - [x] 7.4 On input (debounced 150ms), filter all tabs by fuzzy match against title + URL
+  - [x] 7.5 Render results as flat list (not tree) with match characters highlighted (bold or colored)
+  - [x] 7.6 Click result → `ACTIVATE_TAB`, clear search, restore tree
+  - [x] 7.7 Escape key or clear button → restore tree view
+  - [x] 7.8 Verify: Type partial tab title, matching tabs appear, non-matches hidden, click switches to tab, escape restores tree (ready for manual verification)
 
 - [ ] 8.0 Drag & drop
   - [ ] 8.1 Create `sidepanel/modules/drag-drop.js` — export `initDragDrop(container, onReorder, onReparent)`

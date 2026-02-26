@@ -31,3 +31,16 @@
   color: var(--accent);
   font-weight: 600;
 }
+
+.search-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.search-url-visible {
+  display: block !important;
+  font-size: 11px;
+  margin-top: 2px;
+}
