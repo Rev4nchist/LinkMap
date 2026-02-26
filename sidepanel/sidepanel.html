@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="midnight">
+<html lang="en" data-theme="august-default">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,6 +15,26 @@
     <header id="header">
       <div class="search-container">
         <input type="text" id="search-input" placeholder="Search tabs..." autocomplete="off">
+      </div>
+      <div class="toolbar-buttons">
+        <button id="collapse-all-btn" title="Collapse All" aria-label="Collapse All">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="1.5" y="1.5" width="11" height="11" rx="2"/>
+            <path d="M4 7h6" stroke-width="1.5"/>
+          </svg>
+        </button>
+        <button id="expand-all-btn" title="Expand All" aria-label="Expand All">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="1.5" y="1.5" width="11" height="11" rx="2"/>
+            <path d="M4 7h6M7 4v6" stroke-width="1.5"/>
+          </svg>
+        </button>
+        <button id="focus-mode-btn" title="Focus on Active Tab" aria-label="Focus on Active Tab">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="7" cy="7" r="2.5"/>
+            <path d="M7 1v3M7 10v3M1 7h3M10 7h3"/>
+          </svg>
+        </button>
       </div>
       <button id="settings-btn" title="Settings" aria-label="Settings">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -35,10 +55,16 @@
       <div class="tab-count"><span id="tab-count-num">0</span> tabs</div>
       <div class="theme-selector">
         <select id="theme-select">
-          <option value="midnight">Midnight</option>
-          <option value="oled">OLED</option>
-          <option value="dracula">Dracula</option>
-          <option value="nord">Nord</option>
+          <option value="august-default">August</option>
+          <option value="midnight-mars">Midnight Mars</option>
+          <option value="deep-forest">Deep Forest</option>
+          <option value="oceanic-depth">Oceanic Depth</option>
+          <option value="palenight">Palenight</option>
+          <option value="espresso">Espresso</option>
+          <option value="cyberpunk-dim">Cyberpunk</option>
+          <option value="nord-darker">Nord</option>
+          <option value="dracula-soft">Dracula</option>
+          <option value="oled-void">OLED Void</option>
         </select>
       </div>
     </footer>

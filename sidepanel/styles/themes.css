@@ -1,60 +1,128 @@
-/* Midnight (Default) */
-[data-theme="midnight"] {
-  --bg-primary: #1a1b2e;
-  --bg-secondary: #232440;
-  --bg-active: #2a2b4a;
-  --text-primary: #e0e0f0;
-  --text-secondary: #8888aa;
-  --text-muted: #555577;
-  --accent: #6c8cff;
-  --border: #2d2e4a;
-  --scrollbar-thumb: #3a3b5a;
-  --scrollbar-track: #1a1b2e;
-  --close-hover: #ff4444;
-  --search-bg: #232440;
-  --search-border: #3a3b5a;
+/* August Default — Lavender accent */
+[data-theme="august-default"] {
+  --bg-primary: #18181b;
+  --bg-secondary: #27272a;
+  --bg-active: #3f3f46;
+  --text-primary: #a1a1aa;
+  --text-secondary: #71717a;
+  --text-muted: #52525b;
+  --accent: #c084fc;
+  --border: #27272a;
+  --scrollbar-thumb: #3f3f46;
+  --scrollbar-track: #18181b;
+  --close-hover: #ef4444;
+  --search-bg: #27272a;
+  --search-border: #3f3f46;
 }
 
-/* OLED */
-[data-theme="oled"] {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --bg-active: #1a1a1a;
-  --text-primary: #ffffff;
-  --text-secondary: #888888;
-  --text-muted: #444444;
-  --accent: #00aaff;
-  --border: #222222;
-  --scrollbar-thumb: #333333;
-  --scrollbar-track: #000000;
-  --close-hover: #ff4444;
-  --search-bg: #0a0a0a;
-  --search-border: #333333;
+/* Midnight Mars — Soft Red accent */
+[data-theme="midnight-mars"] {
+  --bg-primary: #1a0b0b;
+  --bg-secondary: #2d1515;
+  --bg-active: #3d2020;
+  --text-primary: #e5e5e5;
+  --text-secondary: #a8a8a8;
+  --text-muted: #6b5555;
+  --accent: #f87171;
+  --border: #2d1515;
+  --scrollbar-thumb: #3d2020;
+  --scrollbar-track: #1a0b0b;
+  --close-hover: #ef4444;
+  --search-bg: #2d1515;
+  --search-border: #3d2020;
 }
 
-/* Dracula */
-[data-theme="dracula"] {
-  --bg-primary: #282a36;
-  --bg-secondary: #2d2f3d;
-  --bg-active: #44475a;
-  --text-primary: #f8f8f2;
-  --text-secondary: #bd93f9;
-  --text-muted: #6272a4;
-  --accent: #ff79c6;
-  --border: #44475a;
-  --scrollbar-thumb: #555770;
-  --scrollbar-track: #282a36;
-  --close-hover: #ff5555;
-  --search-bg: #2d2f3d;
-  --search-border: #555770;
+/* Deep Forest — Emerald accent */
+[data-theme="deep-forest"] {
+  --bg-primary: #0f1712;
+  --bg-secondary: #1a2a1e;
+  --bg-active: #253a2a;
+  --text-primary: #d1fae5;
+  --text-secondary: #6ee7b7;
+  --text-muted: #3b6b4a;
+  --accent: #34d399;
+  --border: #1a2a1e;
+  --scrollbar-thumb: #253a2a;
+  --scrollbar-track: #0f1712;
+  --close-hover: #ef4444;
+  --search-bg: #1a2a1e;
+  --search-border: #253a2a;
 }
 
-/* Nord */
-[data-theme="nord"] {
+/* Oceanic Depth — Sky Blue accent */
+[data-theme="oceanic-depth"] {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-active: #2d3a4f;
+  --text-primary: #bae6fd;
+  --text-secondary: #7dd3fc;
+  --text-muted: #475569;
+  --accent: #38bdf8;
+  --border: #1e293b;
+  --scrollbar-thumb: #2d3a4f;
+  --scrollbar-track: #0f172a;
+  --close-hover: #ef4444;
+  --search-bg: #1e293b;
+  --search-border: #2d3a4f;
+}
+
+/* Palenight — Purple accent */
+[data-theme="palenight"] {
+  --bg-primary: #292d3e;
+  --bg-secondary: #32374d;
+  --bg-active: #3b415c;
+  --text-primary: #a6accd;
+  --text-secondary: #8087a2;
+  --text-muted: #676e95;
+  --accent: #c792ea;
+  --border: #32374d;
+  --scrollbar-thumb: #3b415c;
+  --scrollbar-track: #292d3e;
+  --close-hover: #ff5370;
+  --search-bg: #32374d;
+  --search-border: #3b415c;
+}
+
+/* Espresso — Amber accent */
+[data-theme="espresso"] {
+  --bg-primary: #1c1917;
+  --bg-secondary: #292524;
+  --bg-active: #3b3532;
+  --text-primary: #d6d3d1;
+  --text-secondary: #a8a29e;
+  --text-muted: #78716c;
+  --accent: #d97706;
+  --border: #292524;
+  --scrollbar-thumb: #3b3532;
+  --scrollbar-track: #1c1917;
+  --close-hover: #ef4444;
+  --search-bg: #292524;
+  --search-border: #3b3532;
+}
+
+/* Cyberpunk Dim — Neon Pink accent */
+[data-theme="cyberpunk-dim"] {
+  --bg-primary: #050505;
+  --bg-secondary: #141414;
+  --bg-active: #1f1f1f;
+  --text-primary: #e5e5e5;
+  --text-secondary: #a3a3a3;
+  --text-muted: #525252;
+  --accent: #f472b6;
+  --border: #141414;
+  --scrollbar-thumb: #1f1f1f;
+  --scrollbar-track: #050505;
+  --close-hover: #fb7185;
+  --search-bg: #141414;
+  --search-border: #1f1f1f;
+}
+
+/* Nord Darker — Frost accent */
+[data-theme="nord-darker"] {
   --bg-primary: #2e3440;
   --bg-secondary: #3b4252;
   --bg-active: #434c5e;
-  --text-primary: #eceff4;
+  --text-primary: #d8dee9;
   --text-secondary: #81a1c1;
   --text-muted: #4c566a;
   --accent: #88c0d0;
@@ -64,4 +132,38 @@
   --close-hover: #bf616a;
   --search-bg: #3b4252;
   --search-border: #4c566a;
+}
+
+/* Dracula Soft — Soft Purple accent */
+[data-theme="dracula-soft"] {
+  --bg-primary: #282a36;
+  --bg-secondary: #2d2f3d;
+  --bg-active: #3a3c4e;
+  --text-primary: #f8f8f2;
+  --text-secondary: #8be9fd;
+  --text-muted: #6272a4;
+  --accent: #bd93f9;
+  --border: #2d2f3d;
+  --scrollbar-thumb: #44475a;
+  --scrollbar-track: #282a36;
+  --close-hover: #ff5555;
+  --search-bg: #2d2f3d;
+  --search-border: #44475a;
+}
+
+/* OLED Void — White accent */
+[data-theme="oled-void"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-active: #171717;
+  --text-primary: #737373;
+  --text-secondary: #525252;
+  --text-muted: #404040;
+  --accent: #ffffff;
+  --border: #0a0a0a;
+  --scrollbar-thumb: #171717;
+  --scrollbar-track: #000000;
+  --close-hover: #ef4444;
+  --search-bg: #0a0a0a;
+  --search-border: #171717;
 }

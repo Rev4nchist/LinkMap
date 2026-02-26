@@ -48,6 +48,7 @@ function getStatePayload() {
     tabs: Object.fromEntries(state.tabs),
     rootIds: state.rootIds,
     collapsed: [...state.collapsed],
+    groups: Object.fromEntries(state.groups),
     groupColors: state.groupColors,
     theme: state.theme,
     activeTabId: activeTabId,
@@ -56,9 +57,10 @@ function getStatePayload() {
 
 /**
  * Sends a STATE_UPDATE message to the side panel.
- * Silently catches errors when the side panel is not open.
+ * Debounced to coalesce rapid events (e.g., group toggle triggers
+ * multiple tab updates). 16ms ≈ one animation frame.
  */
-function broadcastState() {
+const broadcastState = debounce(() => {
   try {
     chrome.runtime.sendMessage({
       type: MSG.STATE_UPDATE,
@@ -69,7 +71,7 @@ function broadcastState() {
   } catch (_e) {
     // Synchronous throw — side panel not open.
   }
-}
+}, 16);
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -79,7 +81,7 @@ function broadcastState() {
  * Initializes the service worker:
  * 1. Loads saved state from chrome.storage.local
  * 2. Reconstructs ShadowState from storage
- * 3. Reconciles with live Chrome tabs
+ * 3. Reconciles with live Chrome tabs and groups
  * 4. Identifies the active tab
  * 5. Persists the reconciled state
  */
@@ -98,6 +100,10 @@ async function init() {
     const liveTabs = await chrome.tabs.query({});
     state.reconcileWithLiveTabs(liveTabs);
 
+    // 3b. Query all live tab groups and reconcile
+    const liveGroups = await chrome.tabGroups.query({});
+    state.reconcileWithLiveGroups(liveGroups);
+
     // 4. Identify the active tab
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (activeTabs.length > 0) {
@@ -108,7 +114,7 @@ async function init() {
     saveState();
     broadcastState();
 
-    console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs`);
+    console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs, ${state.groups.size} groups`);
   } catch (err) {
     console.error('[LinkMap] Init error:', err);
   }
@@ -120,7 +126,7 @@ async function init() {
 
 /** @type {Set<string>} Fields in changeInfo that trigger an update. */
 const RELEVANT_CHANGE_FIELDS = new Set([
-  'title', 'url', 'favIconUrl', 'status', 'pinned', 'audible',
+  'title', 'url', 'favIconUrl', 'status', 'pinned', 'audible', 'groupId',
 ]);
 
 /**
@@ -182,6 +188,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
   if ('status' in changeInfo) changes.status = changeInfo.status;
   if ('pinned' in changeInfo) changes.pinned = changeInfo.pinned;
   if ('audible' in changeInfo) changes.audible = changeInfo.audible;
+  if ('groupId' in changeInfo) changes.groupId = changeInfo.groupId;
 
   state.updateTab(tabId, changes);
   saveState();
@@ -238,6 +245,71 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
 chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
   console.log(`[LinkMap] Tab detached: ${tabId} from window ${detachInfo.oldWindowId}`);
   saveState();
+});
+
+/**
+ * chrome.tabs.onReplaced — A tab ID was replaced (prerendered → real).
+ * Remaps the old ID to the new ID in ShadowState, preserving tree structure.
+ */
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  state.replaceTabId(removedTabId, addedTabId);
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Tab replaced: ${removedTabId} → ${addedTabId}`);
+});
+
+// ---------------------------------------------------------------------------
+// Tab Group Event Listeners
+// ---------------------------------------------------------------------------
+
+/**
+ * chrome.tabGroups.onCreated — A tab group was created.
+ */
+chrome.tabGroups.onCreated.addListener((group) => {
+  state.addGroup(group);
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Group created: ${group.id} "${group.title || 'untitled'}"`);
+});
+
+/**
+ * chrome.tabGroups.onUpdated — A tab group's properties changed.
+ */
+chrome.tabGroups.onUpdated.addListener((group) => {
+  state.updateGroup(group.id, {
+    title: group.title,
+    color: group.color,
+    collapsed: group.collapsed,
+  });
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Group updated: ${group.id} "${group.title || 'untitled'}"`);
+});
+
+/**
+ * chrome.tabGroups.onRemoved — A tab group was removed.
+ */
+chrome.tabGroups.onRemoved.addListener((group) => {
+  state.removeGroup(group.id);
+  saveState();
+  broadcastState();
+
+  console.log(`[LinkMap] Group removed: ${group.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// Service Worker Lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * chrome.runtime.onSuspend — Flush state before worker terminates.
+ */
+chrome.runtime.onSuspend.addListener(() => {
+  chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() });
+  console.log('[LinkMap] State flushed on suspend');
 });
 
 // ---------------------------------------------------------------------------
@@ -302,6 +374,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case MSG.TOGGLE_COLLAPSE:
       state.toggleCollapse(payload.tabId);
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.COLLAPSE_ALL:
+      state.collapseAll();
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.EXPAND_ALL:
+      state.expandAll();
+      saveState();
+      broadcastState();
+      break;
+
+    case MSG.FOCUS_MODE:
+      state.focusOnBranch(payload.tabId);
       saveState();
       broadcastState();
       break;

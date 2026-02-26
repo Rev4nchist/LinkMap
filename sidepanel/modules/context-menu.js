@@ -64,6 +64,15 @@ export function showContextMenu(tabId, x, y) {
     }
   }));
 
+  // Close Branch — closes tab + all descendants
+  const hasChildren = tab.children && tab.children.length > 0;
+  if (hasChildren) {
+    items.push(menuItem('Close Branch', () => {
+      const ids = [tabId, ...getDescendantIds(tabId)];
+      actions.closeTabs(ids);
+    }));
+  }
+
   items.push(separator());
 
   items.push(menuItem('Duplicate', () => actions.duplicateTab(tabId)));
@@ -74,6 +83,30 @@ export function showContextMenu(tabId, x, y) {
 
   items.push(menuItem(tab.audible ? 'Mute Tab' : 'Unmute Tab', () => {
     actions.muteTab(tabId, !tab.audible);
+  }));
+
+  // --- Group actions ---
+  items.push(separator());
+
+  if (tab.groupId !== undefined && tab.groupId !== -1) {
+    items.push(menuItem('Remove from Group', () => {
+      chrome.tabs.ungroup(tabId);
+    }));
+  }
+
+  // Move to existing groups
+  const groups = currentState.groups || {};
+  for (const [gId, group] of Object.entries(groups)) {
+    const groupId = Number(gId);
+    if (groupId === tab.groupId) continue;
+    const label = group.title ? `Move to "${group.title}"` : `Move to Group`;
+    items.push(menuItem(label, () => {
+      chrome.tabs.group({ tabIds: [tabId], groupId });
+    }));
+  }
+
+  items.push(menuItem('New Group', () => {
+    chrome.tabs.group({ tabIds: [tabId] });
   }));
 
   // Render
@@ -113,6 +146,23 @@ function menuItem(label, onClick, danger = false) {
 
 function separator() {
   return el('div', { className: 'context-menu-separator' });
+}
+
+/**
+ * Collects all descendant tab IDs via tree walk.
+ */
+function getDescendantIds(tabId) {
+  const ids = [];
+  const walk = (id) => {
+    const tab = currentState?.tabs?.[id];
+    if (!tab || !tab.children) return;
+    for (const childId of tab.children) {
+      ids.push(childId);
+      walk(childId);
+    }
+  };
+  walk(tabId);
+  return ids;
 }
 
 // ---------------------------------------------------------------------------

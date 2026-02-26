@@ -52,7 +52,10 @@ export class ShadowState {
     /** @type {Set<number>} Tab IDs whose subtrees are collapsed in the UI */
     this.collapsed = new Set();
 
-    /** @type {Object<number, string>} groupId -> hex color */
+    /** @type {Map<number, Object>} groupId -> { id, title, color, collapsed, windowId } */
+    this.groups = new Map();
+
+    /** @type {Object<number, string>} groupId -> hex color (manual overrides) */
     this.groupColors = {};
 
     /** @type {string} Active theme name */
@@ -195,6 +198,44 @@ export class ShadowState {
   }
 
   /**
+   * Collapses all tabs that have children.
+   */
+  collapseAll() {
+    for (const [id, node] of this.tabs) {
+      if (node.children.length > 0) {
+        this.collapsed.add(id);
+      }
+    }
+  }
+
+  /**
+   * Expands all tabs (clears collapsed set).
+   */
+  expandAll() {
+    this.collapsed.clear();
+  }
+
+  /**
+   * Focus mode: collapses all, then expands the path from root to target tab.
+   *
+   * @param {number} tabId
+   */
+  focusOnBranch(tabId) {
+    this.collapseAll();
+
+    // Walk from target up to root, expanding each ancestor
+    let current = this.tabs.get(tabId);
+    while (current) {
+      this.collapsed.delete(current.tabId);
+      if (current.parentId != null) {
+        current = this.tabs.get(current.parentId);
+      } else {
+        break;
+      }
+    }
+  }
+
+  /**
    * Sets the active theme.
    *
    * @param {string} themeName
@@ -211,6 +252,93 @@ export class ShadowState {
    */
   setGroupColor(groupId, color) {
     this.groupColors[groupId] = color;
+  }
+
+  // -----------------------------------------------------------------------
+  // Group Mutations
+  // -----------------------------------------------------------------------
+
+  /**
+   * Adds or updates a Chrome tab group.
+   *
+   * @param {Object} group - Chrome TabGroup object.
+   */
+  addGroup(group) {
+    this.groups.set(group.id, {
+      id: group.id,
+      title: group.title || '',
+      color: group.color || 'grey',
+      collapsed: group.collapsed || false,
+      windowId: group.windowId,
+    });
+  }
+
+  /**
+   * Updates properties of an existing group.
+   *
+   * @param {number} groupId
+   * @param {Object} changes
+   */
+  updateGroup(groupId, changes) {
+    const group = this.groups.get(groupId);
+    if (!group) return;
+    if ('title' in changes) group.title = changes.title;
+    if ('color' in changes) group.color = changes.color;
+    if ('collapsed' in changes) group.collapsed = changes.collapsed;
+  }
+
+  /**
+   * Removes a group from state.
+   *
+   * @param {number} groupId
+   */
+  removeGroup(groupId) {
+    this.groups.delete(groupId);
+  }
+
+  /**
+   * Replaces a tab ID throughout the tree (for chrome.tabs.onReplaced).
+   * Remaps the tab in this.tabs, updates parent/child pointers, rootIds,
+   * and collapsed set.
+   *
+   * @param {number} oldId
+   * @param {number} newId
+   */
+  replaceTabId(oldId, newId) {
+    const node = this.tabs.get(oldId);
+    if (!node) return;
+
+    // Update the node's own tabId
+    node.tabId = newId;
+
+    // Remap in tabs Map
+    this.tabs.delete(oldId);
+    this.tabs.set(newId, node);
+
+    // Update parent's children array
+    if (node.parentId != null) {
+      const parent = this.tabs.get(node.parentId);
+      if (parent) {
+        const idx = parent.children.indexOf(oldId);
+        if (idx !== -1) parent.children[idx] = newId;
+      }
+    }
+
+    // Update children's parentId
+    for (const childId of node.children) {
+      const child = this.tabs.get(childId);
+      if (child) child.parentId = newId;
+    }
+
+    // Update rootIds
+    const rootIdx = this.rootIds.indexOf(oldId);
+    if (rootIdx !== -1) this.rootIds[rootIdx] = newId;
+
+    // Update collapsed set
+    if (this.collapsed.has(oldId)) {
+      this.collapsed.delete(oldId);
+      this.collapsed.add(newId);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -336,6 +464,7 @@ export class ShadowState {
       tabs: Object.fromEntries(this.tabs),
       rootIds: [...this.rootIds],
       collapsed: [...this.collapsed],
+      groups: Object.fromEntries(this.groups),
       groupColors: { ...this.groupColors },
       theme: this.theme,
     };
@@ -362,6 +491,14 @@ export class ShadowState {
 
     state.rootIds = Array.isArray(data.rootIds) ? [...data.rootIds] : [];
     state.collapsed = new Set(Array.isArray(data.collapsed) ? data.collapsed : []);
+
+    // Rebuild groups Map
+    if (data.groups) {
+      for (const [key, group] of Object.entries(data.groups)) {
+        state.groups.set(Number(key), group);
+      }
+    }
+
     state.groupColors = data.groupColors ? { ...data.groupColors } : {};
     state.theme = data.theme ?? DEFAULT_THEME;
 
@@ -375,20 +512,73 @@ export class ShadowState {
   /**
    * Synchronizes in-memory state with the actual Chrome tab list.
    *
-   * - Removes tabs no longer present in Chrome.
-   * - Adds newly detected tabs at root level.
-   * - Updates metadata for surviving tabs.
-   * - Rebuilds rootIds ordered by Chrome's tab index.
+   * Two-pass matching for cross-restart resilience:
+   *   Pass 1: Match by tabId (same session, fast path)
+   *   Pass 2: Match unmatched saved tabs by URL fingerprint (cross-restart)
    *
    * @param {Object[]} liveTabs - Array from chrome.tabs.query({}).
    */
   reconcileWithLiveTabs(liveTabs) {
-    const liveIds = new Set(liveTabs.map((t) => t.id));
+    const liveById = new Map(liveTabs.map((t) => [t.id, t]));
+    const matchedLiveIds = new Set();
 
-    // (a) Remove dead tabs.
+    // Pass 1: Match by tabId (same session)
+    for (const id of this.tabs.keys()) {
+      if (liveById.has(id)) {
+        matchedLiveIds.add(id);
+      }
+    }
+
+    // Pass 2: URL-based matching for cross-restart recovery
+    const unmatchedSaved = [];
+    for (const [id, node] of this.tabs) {
+      if (!matchedLiveIds.has(id) && !liveById.has(id)) {
+        unmatchedSaved.push([id, node]);
+      }
+    }
+
+    const unmatchedLive = liveTabs.filter((t) => !matchedLiveIds.has(t.id));
+
+    // Build URL index for unmatched live tabs (skip generic URLs)
+    const liveByUrl = new Map();
+    for (const tab of unmatchedLive) {
+      const url = tab.url || '';
+      if (!url || url === 'chrome://newtab/' || url === 'about:blank') continue;
+      if (!liveByUrl.has(url)) liveByUrl.set(url, []);
+      liveByUrl.get(url).push(tab);
+    }
+
+    // Match saved → live by composite fingerprint (url, title, index)
+    for (const [savedId, savedNode] of unmatchedSaved) {
+      const url = savedNode.url || '';
+      if (!url || url === 'chrome://newtab/' || url === 'about:blank') continue;
+
+      const candidates = liveByUrl.get(url);
+      if (!candidates || candidates.length === 0) continue;
+
+      // Pick best match: prefer same title + index, then same title
+      let best = candidates[0];
+      for (const c of candidates) {
+        if (c.title === savedNode.title && c.index === savedNode.index) {
+          best = c;
+          break;
+        }
+        if (c.title === savedNode.title) best = c;
+      }
+
+      // Remap saved ID to live ID — preserves tree structure
+      this.replaceTabId(savedId, best.id);
+      matchedLiveIds.add(best.id);
+
+      // Remove used candidate
+      const idx = candidates.indexOf(best);
+      if (idx !== -1) candidates.splice(idx, 1);
+    }
+
+    // (a) Remove dead tabs (saved tabs with no live match).
     const deadIds = [];
     for (const id of this.tabs.keys()) {
-      if (!liveIds.has(id)) deadIds.push(id);
+      if (!liveById.has(id)) deadIds.push(id);
     }
     for (const id of deadIds) {
       this.removeTab(id);
@@ -420,6 +610,25 @@ export class ShadowState {
       .filter((n) => n.parentId === null)
       .sort((a, b) => a.index - b.index)
       .map((n) => n.tabId);
+  }
+
+  /**
+   * Synchronizes in-memory group state with live Chrome tab groups.
+   *
+   * @param {Object[]} liveGroups - Array from chrome.tabGroups.query({}).
+   */
+  reconcileWithLiveGroups(liveGroups) {
+    const liveIds = new Set(liveGroups.map((g) => g.id));
+
+    // Remove dead groups
+    for (const id of this.groups.keys()) {
+      if (!liveIds.has(id)) this.groups.delete(id);
+    }
+
+    // Add/update live groups
+    for (const group of liveGroups) {
+      this.addGroup(group);
+    }
   }
 }
 

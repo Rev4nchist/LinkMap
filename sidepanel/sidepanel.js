@@ -21,6 +21,9 @@ const pinnedList = document.getElementById('pinned-list');
 const tabCountNum = document.getElementById('tab-count-num');
 const searchInput = document.getElementById('search-input');
 const themeSelect = document.getElementById('theme-select');
+const collapseAllBtn = document.getElementById('collapse-all-btn');
+const expandAllBtn = document.getElementById('expand-all-btn');
+const focusModeBtn = document.getElementById('focus-mode-btn');
 
 // ---------------------------------------------------------------------------
 // Current state
@@ -28,6 +31,7 @@ const themeSelect = document.getElementById('theme-select');
 
 let currentState = null;
 let currentActiveTabId = null;
+let focusedTabId = null;
 
 // ---------------------------------------------------------------------------
 // Drag & Drop
@@ -71,6 +75,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG.TAB_ACTIVATED:
       currentActiveTabId = message.payload.tabId;
       render();
+      scrollToActiveTab(message.payload.tabId);
       break;
     case MSG.THEME_CHANGED:
       document.documentElement.dataset.theme = message.payload.theme;
@@ -99,9 +104,21 @@ function handleStateUpdate(payload) {
   render();
 }
 
+let renderRafId = null;
+
 function render() {
   if (!currentState) return;
   if (search.isActive()) return; // don't overwrite search results
+
+  // Coalesce rapid re-renders via rAF
+  if (renderRafId) cancelAnimationFrame(renderRafId);
+  renderRafId = requestAnimationFrame(renderNow);
+}
+
+function renderNow() {
+  renderRafId = null;
+  if (!currentState) return;
+  if (search.isActive()) return;
 
   renderTree(currentState, currentActiveTabId, treeContainer, pinnedList);
 
@@ -112,6 +129,41 @@ function render() {
   // Update tab count
   const tabCount = Object.keys(currentState.tabs).length;
   tabCountNum.textContent = tabCount;
+
+  // Re-apply keyboard focus ring after re-render
+  updateFocusRing();
+}
+
+// ---------------------------------------------------------------------------
+// Scroll-to-Active (Feature 3)
+// ---------------------------------------------------------------------------
+
+function scrollToActiveTab(tabId) {
+  if (!currentState) return;
+  const tab = currentState.tabs[tabId];
+  if (!tab) return;
+
+  // Auto-expand collapsed ancestors so the active tab is visible
+  const collapsedSet = new Set(currentState.collapsed);
+  let parentId = tab.parentId;
+  while (parentId != null) {
+    if (collapsedSet.has(parentId)) {
+      chrome.runtime.sendMessage({
+        type: MSG.TOGGLE_COLLAPSE,
+        payload: { tabId: parentId },
+      }).catch(() => {});
+    }
+    const parent = currentState.tabs[parentId];
+    parentId = parent?.parentId ?? null;
+  }
+
+  // Scroll after state updates propagate
+  setTimeout(() => {
+    const el = treeContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +172,21 @@ function render() {
 
 // Click handling (event delegation)
 treeContainer.addEventListener('click', (e) => {
+  // Group header click — optimistic toggle + Chrome API sync
+  const groupHeader = e.target.closest('.group-header');
+  if (groupHeader) {
+    const groupId = Number(groupHeader.dataset.groupId);
+    const group = currentState?.groups?.[groupId];
+    if (group) {
+      // Optimistic: update local state immediately for instant UI
+      group.collapsed = !group.collapsed;
+      renderNow();
+      // Sync with Chrome (background will confirm via broadcast)
+      chrome.tabGroups.update(groupId, { collapsed: group.collapsed });
+    }
+    return;
+  }
+
   const tabEntry = e.target.closest('.tab-entry');
   if (!tabEntry) return;
 
@@ -127,18 +194,18 @@ treeContainer.addEventListener('click', (e) => {
 
   // Close button clicked
   if (e.target.closest('.tab-close')) {
-    chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } });
+    chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } }).catch(() => {});
     return;
   }
 
   // Chevron clicked (collapse/expand)
   if (e.target.closest('.tab-chevron')) {
-    chrome.runtime.sendMessage({ type: MSG.TOGGLE_COLLAPSE, payload: { tabId } });
+    chrome.runtime.sendMessage({ type: MSG.TOGGLE_COLLAPSE, payload: { tabId } }).catch(() => {});
     return;
   }
 
   // Tab clicked — activate it
-  chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } });
+  chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
 });
 
 // Middle-click to close
@@ -148,7 +215,7 @@ treeContainer.addEventListener('auxclick', (e) => {
   if (!tabEntry) return;
   e.preventDefault();
   const tabId = Number(tabEntry.dataset.tabId);
-  chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } });
+  chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } }).catch(() => {});
 });
 
 // Right-click context menu
@@ -168,7 +235,7 @@ pinnedList.addEventListener('click', (e) => {
   const pinnedTab = e.target.closest('.pinned-tab');
   if (!pinnedTab) return;
   const tabId = Number(pinnedTab.dataset.tabId);
-  chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } });
+  chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
 });
 
 // Right-click context menu on pinned tabs
@@ -186,8 +253,189 @@ pinnedList.addEventListener('contextmenu', (e) => {
 
 if (themeSelect) {
   themeSelect.addEventListener('change', (e) => {
-    chrome.runtime.sendMessage({ type: MSG.SET_THEME, payload: { theme: e.target.value } });
+    chrome.runtime.sendMessage({ type: MSG.SET_THEME, payload: { theme: e.target.value } }).catch(() => {});
   });
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar Buttons (Feature 1: Collapse All / Expand All / Focus Mode)
+// ---------------------------------------------------------------------------
+
+if (collapseAllBtn) {
+  collapseAllBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: MSG.COLLAPSE_ALL }).catch(() => {});
+  });
+}
+
+if (expandAllBtn) {
+  expandAllBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: MSG.EXPAND_ALL }).catch(() => {});
+  });
+}
+
+if (focusModeBtn) {
+  focusModeBtn.addEventListener('click', () => {
+    if (currentActiveTabId) {
+      chrome.runtime.sendMessage({
+        type: MSG.FOCUS_MODE,
+        payload: { tabId: currentActiveTabId },
+      }).catch(() => {});
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard Navigation (Feature 4)
+// ---------------------------------------------------------------------------
+
+document.addEventListener('keydown', (e) => {
+  // Skip when search input is focused (except Escape)
+  if (document.activeElement === searchInput && e.key !== 'Escape') return;
+
+  switch (e.key) {
+    case 'ArrowUp':
+      e.preventDefault();
+      moveFocus(-1);
+      break;
+
+    case 'ArrowDown':
+      e.preventDefault();
+      moveFocus(1);
+      break;
+
+    case 'Enter':
+      if (focusedTabId != null) {
+        e.preventDefault();
+        chrome.runtime.sendMessage({
+          type: MSG.ACTIVATE_TAB,
+          payload: { tabId: focusedTabId },
+        }).catch(() => {});
+      }
+      break;
+
+    case 'Delete':
+      if (focusedTabId != null) {
+        e.preventDefault();
+        chrome.runtime.sendMessage({
+          type: MSG.CLOSE_TAB,
+          payload: { tabId: focusedTabId },
+        }).catch(() => {});
+        focusedTabId = null;
+        updateFocusRing();
+      }
+      break;
+
+    case 'ArrowLeft':
+      if (focusedTabId != null) {
+        e.preventDefault();
+        const tabL = currentState?.tabs?.[focusedTabId];
+        if (tabL?.children?.length > 0) {
+          const isCollapsed = currentState.collapsed.includes(focusedTabId);
+          if (!isCollapsed) {
+            chrome.runtime.sendMessage({
+              type: MSG.TOGGLE_COLLAPSE,
+              payload: { tabId: focusedTabId },
+            }).catch(() => {});
+          }
+        }
+      }
+      break;
+
+    case 'ArrowRight':
+      if (focusedTabId != null) {
+        e.preventDefault();
+        const tabR = currentState?.tabs?.[focusedTabId];
+        if (tabR?.children?.length > 0) {
+          const isCollapsed = currentState.collapsed.includes(focusedTabId);
+          if (isCollapsed) {
+            chrome.runtime.sendMessage({
+              type: MSG.TOGGLE_COLLAPSE,
+              payload: { tabId: focusedTabId },
+            }).catch(() => {});
+          }
+        }
+      }
+      break;
+
+    case 'Home':
+      e.preventDefault();
+      focusFirst();
+      break;
+
+    case 'End':
+      e.preventDefault();
+      focusLast();
+      break;
+
+    case 'Escape':
+      if (document.activeElement === searchInput) return; // let search handle it
+      focusedTabId = null;
+      updateFocusRing();
+      break;
+  }
+});
+
+/**
+ * Returns visible tab IDs in DOM order from the tree container.
+ */
+function getVisibleTabIds() {
+  const entries = treeContainer.querySelectorAll('.tab-entry[data-tab-id]');
+  return [...entries].map((el) => Number(el.dataset.tabId));
+}
+
+/**
+ * Moves keyboard focus up or down.
+ */
+function moveFocus(direction) {
+  const visibleIds = getVisibleTabIds();
+  if (visibleIds.length === 0) return;
+
+  if (focusedTabId == null) {
+    focusedTabId = visibleIds[direction > 0 ? 0 : visibleIds.length - 1];
+  } else {
+    const currentIdx = visibleIds.indexOf(focusedTabId);
+    if (currentIdx === -1) {
+      focusedTabId = visibleIds[0];
+    } else {
+      const nextIdx = Math.max(0, Math.min(visibleIds.length - 1, currentIdx + direction));
+      focusedTabId = visibleIds[nextIdx];
+    }
+  }
+  updateFocusRing();
+}
+
+function focusFirst() {
+  const visibleIds = getVisibleTabIds();
+  if (visibleIds.length > 0) {
+    focusedTabId = visibleIds[0];
+    updateFocusRing();
+  }
+}
+
+function focusLast() {
+  const visibleIds = getVisibleTabIds();
+  if (visibleIds.length > 0) {
+    focusedTabId = visibleIds[visibleIds.length - 1];
+    updateFocusRing();
+  }
+}
+
+/**
+ * Updates the visual focus ring on the focused tab entry.
+ */
+function updateFocusRing() {
+  // Clear all existing focus indicators
+  treeContainer.querySelectorAll('[data-focused]').forEach((el) => {
+    delete el.dataset.focused;
+  });
+
+  if (focusedTabId != null) {
+    const el = treeContainer.querySelector(`[data-tab-id="${focusedTabId}"]`);
+    if (el) {
+      el.dataset.focused = 'true';
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +508,7 @@ function showSettings() {
     if (!e.target.classList.contains('group-color-input')) return;
     const groupId = Number(e.target.dataset.groupId);
     const color = e.target.value;
-    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } });
+    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } }).catch(() => {});
   });
 
   treeContainer.before(panel);
