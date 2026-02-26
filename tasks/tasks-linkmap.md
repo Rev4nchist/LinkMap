@@ -84,19 +84,19 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 3.11 Implement state broadcast — after mutations, send `STATE_UPDATE` to side panel via `chrome.runtime.sendMessage()` (wrap in try/catch since panel may be closed)
   - [x] 3.12 Verify: ready for manual verification — 40 unit tests passing via `node --test tests/background.test.js`
 
-- [ ] 4.0 Side panel — tree rendering
-  - [ ] 4.1 Create `sidepanel/modules/tree-renderer.js` — export `renderTree(state, container)` function
-  - [ ] 4.2 Implement recursive tree DOM builder — for each root tab, create tab element, recursively render children with increasing indent level
-  - [ ] 4.3 Tab element structure: favicon img, title text, URL (truncated, muted), close button, collapse chevron (if has children)
-  - [ ] 4.4 Visual tree lines — CSS `border-left` on children containers, `::before` pseudo-element for branch connectors (├─ and └─)
-  - [ ] 4.5 Active tab highlight — add `data-active` attribute, style with `--bg-active` variable
-  - [ ] 4.6 Loading state — show spinner icon when `tab.status === 'loading'`
-  - [ ] 4.7 Audible indicator — show speaker icon when `tab.audible === true`
-  - [ ] 4.8 Pinned tabs section — render pinned tabs in a separate container above the tree
-  - [ ] 4.9 Wire up message listener in `sidepanel.js` — on `STATE_UPDATE`, call `renderTree()` with new state
-  - [ ] 4.10 Wire up `GET_STATE` response — initial render on side panel open
-  - [ ] 4.11 Implement collapse/expand — click chevron sends `TOGGLE_COLLAPSE` to background, re-render hides children of collapsed nodes
-  - [ ] 4.12 Verify: Open side panel, tabs appear in tree structure, new tabs nest correctly under parents, collapse/expand works, active tab highlighted
+- [x] 4.0 Side panel — tree rendering
+  - [x] 4.1 Create `sidepanel/modules/tree-renderer.js` — export `renderTree(state, container)` function
+  - [x] 4.2 Implement recursive tree DOM builder — for each root tab, create tab element, recursively render children with increasing indent level
+  - [x] 4.3 Tab element structure: favicon img, title text, URL (truncated, muted), close button, collapse chevron (if has children)
+  - [x] 4.4 Visual tree lines — CSS `border-left` on children containers, `::before` pseudo-element for branch connectors (├─ and └─)
+  - [x] 4.5 Active tab highlight — add `data-active` attribute, style with `--bg-active` variable
+  - [x] 4.6 Loading state — show spinner icon when `tab.status === 'loading'`
+  - [x] 4.7 Audible indicator — show speaker icon when `tab.audible === true`
+  - [x] 4.8 Pinned tabs section — render pinned tabs in a separate container above the tree
+  - [x] 4.9 Wire up message listener in `sidepanel.js` — on `STATE_UPDATE`, call `renderTree()` with new state
+  - [x] 4.10 Wire up `GET_STATE` response — initial render on side panel open
+  - [x] 4.11 Implement collapse/expand — click chevron sends `TOGGLE_COLLAPSE` to background, re-render hides children of collapsed nodes
+  - [x] 4.12 Verify: Open side panel, tabs appear in tree structure, new tabs nest correctly under parents, collapse/expand works, active tab highlighted (ready for manual verification)
 
 - [ ] 5.0 Tab actions & interactions
   - [ ] 5.1 Create `sidepanel/modules/tab-actions.js` — export click handlers
