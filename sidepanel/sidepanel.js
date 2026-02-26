@@ -183,4 +183,85 @@ if (themeSelect) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Settings Panel — Group Color Customization
+// ---------------------------------------------------------------------------
+
+const settingsBtn = document.getElementById('settings-btn');
+let settingsOpen = false;
+
+settingsBtn.addEventListener('click', () => {
+  settingsOpen = !settingsOpen;
+  if (settingsOpen) {
+    showSettings();
+  } else {
+    hideSettings();
+  }
+});
+
+function showSettings() {
+  hideSettings(); // remove stale panel first
+
+  const panel = document.createElement('div');
+  panel.id = 'settings-panel';
+  panel.className = 'settings-panel';
+
+  if (!currentState) {
+    panel.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-label">Settings</div>
+        <div class="settings-hint">Loading state...</div>
+      </div>
+    `;
+    treeContainer.before(panel);
+    return;
+  }
+
+  // Collect unique non-default groupIds from current tabs
+  const groups = new Set();
+  for (const tab of Object.values(currentState.tabs)) {
+    if (tab.groupId !== undefined && tab.groupId !== -1) {
+      groups.add(tab.groupId);
+    }
+  }
+
+  if (groups.size === 0) {
+    panel.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-label">Group Colors</div>
+        <div class="settings-hint">No tab groups found. Create tab groups in Chrome to customize their colors here.</div>
+      </div>
+    `;
+    treeContainer.before(panel);
+    return;
+  }
+
+  let html = '<div class="settings-section"><div class="settings-label">Group Colors</div>';
+  for (const groupId of groups) {
+    const currentColor = currentState.groupColors?.[groupId] || '#6c8cff';
+    html += `
+      <div class="group-color-row">
+        <span class="group-id-label">Group ${groupId}</span>
+        <input type="color" class="group-color-input" data-group-id="${groupId}" value="${currentColor}">
+      </div>
+    `;
+  }
+  html += '</div>';
+  panel.innerHTML = html;
+
+  panel.addEventListener('input', (e) => {
+    if (!e.target.classList.contains('group-color-input')) return;
+    const groupId = Number(e.target.dataset.groupId);
+    const color = e.target.value;
+    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } });
+  });
+
+  treeContainer.before(panel);
+}
+
+function hideSettings() {
+  const panel = document.getElementById('settings-panel');
+  if (panel) panel.remove();
+}
+
 console.log('[LinkMap] Side panel loaded');

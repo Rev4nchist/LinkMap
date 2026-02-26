@@ -23,7 +23,7 @@ const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
  * @param {HTMLElement} pinnedContainer - The #pinned-list element
  */
 export function renderTree(state, activeTabId, container, pinnedContainer) {
-  const { tabs, rootIds, collapsed } = state;
+  const { tabs, rootIds, collapsed, groupColors } = state;
   const collapsedSet = new Set(collapsed);
 
   // Separate pinned from non-pinned tabs
@@ -41,11 +41,11 @@ export function renderTree(state, activeTabId, container, pinnedContainer) {
         for (const childId of tab.children) {
           const child = tabs[childId];
           if (!child || child.pinned) continue;
-          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements);
+          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors);
         }
       }
     } else {
-      renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements);
+      renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors);
     }
   }
 
@@ -64,8 +64,8 @@ export function renderTree(state, activeTabId, container, pinnedContainer) {
  * @param {number|null} activeTabId - Active tab ID
  * @param {Array} elements - Output array to push elements into
  */
-function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements) {
-  elements.push(buildTabEntry(tab, depth, collapsedSet, activeTabId));
+function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, groupColors) {
+  elements.push(buildTabEntry(tab, depth, collapsedSet, activeTabId, groupColors));
 
   const isCollapsed = collapsedSet.has(tab.tabId);
   if (!isCollapsed && tab.children && tab.children.length > 0) {
@@ -73,7 +73,7 @@ function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements) {
       const child = tabs[childId];
       if (!child) continue;
       if (child.pinned) continue; // pinned children go to pinned section
-      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements);
+      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements, groupColors);
     }
   }
 }
@@ -87,7 +87,7 @@ function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements) {
  * @param {number|null} activeTabId - Active tab ID
  * @returns {HTMLElement}
  */
-function buildTabEntry(tab, depth, collapsedSet, activeTabId) {
+function buildTabEntry(tab, depth, collapsedSet, activeTabId, groupColors) {
   const hasChildren = tab.children && tab.children.length > 0;
   const isActive = tab.tabId === activeTabId;
   const isCollapsed = collapsedSet.has(tab.tabId);
@@ -128,7 +128,7 @@ function buildTabEntry(tab, depth, collapsedSet, activeTabId) {
     ? 'tab-entry tab-audible'
     : 'tab-entry';
 
-  return el('div', {
+  const entry = el('div', {
     className: entryClasses,
     dataset: {
       tabId: String(tab.tabId),
@@ -136,6 +136,16 @@ function buildTabEntry(tab, depth, collapsedSet, activeTabId) {
       active: String(isActive),
     },
   }, chevronOrSpacer, favicon, title, closeBtn);
+
+  // Apply group color as left border accent
+  if (tab.groupId !== undefined && tab.groupId !== -1) {
+    const groupColor = groupColors?.[tab.groupId];
+    if (groupColor) {
+      entry.style.borderLeft = `3px solid ${groupColor}`;
+    }
+  }
+
+  return entry;
 }
 
 /**

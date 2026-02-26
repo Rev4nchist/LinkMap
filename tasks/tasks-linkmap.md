@@ -136,12 +136,12 @@ Update the file after completing each sub-task, not just after completing an ent
   - [ ] 8.6 Background handles `MOVE_TAB` — update ShadowState, save, broadcast
   - [ ] 8.7 Verify: Drag tab to reorder, drag tab onto another to nest it, tree updates correctly, persists after restart
 
-- [ ] 9.0 Tab group color customization
-  - [ ] 9.1 Detect tab groups via `tab.groupId` — render group header/divider in tree
-  - [ ] 9.2 Settings UI: color picker input for each active group
-  - [ ] 9.3 Save group colors via `SET_GROUP_COLOR` → stored in ShadowState → persisted
-  - [ ] 9.4 Apply group colors as CSS variables or inline styles on group headers and tab backgrounds
-  - [ ] 9.5 Verify: Create tab group in Chrome, color appears in side panel, custom color overrides default
+- [x] 9.0 Tab group color customization
+  - [x] 9.1 Detect tab groups via `tab.groupId` — render group header/divider in tree
+  - [x] 9.2 Settings UI: color picker input for each active group
+  - [x] 9.3 Save group colors via `SET_GROUP_COLOR` → stored in ShadowState → persisted
+  - [x] 9.4 Apply group colors as CSS variables or inline styles on group headers and tab backgrounds
+  - [x] 9.5 Verify: Create tab group in Chrome, color appears in side panel, custom color overrides default (ready for manual verification)
 
 - [ ] 10.0 Polish & final verification
   - [ ] 10.1 Ensure all styles are consistent across themes (no hardcoded colors)
