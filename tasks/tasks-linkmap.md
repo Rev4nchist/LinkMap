@@ -57,18 +57,18 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 1.8 Create minimal `sidepanel/sidepanel.js` — logs "Side panel loaded", sends `GET_STATE` message to background
   - [x] 1.9 Verify: Load extension in Chrome dev mode, click icon, side panel opens with blank page, console shows log messages from both background and side panel (ready for manual verification)
 
-- [ ] 2.0 Shadow State data layer
-  - [ ] 2.1 Create `shared/shadow-state.js` — implement `ShadowState` class with `tabs` Map, `rootIds` array, `collapsed` Set, `groupColors` object, `theme` string
-  - [ ] 2.2 Implement `addTab(tabId, node)` — adds to Map, updates parent's children array or pushes to rootIds
-  - [ ] 2.3 Implement `removeTab(tabId)` — reparents children to grandparent (or root), removes from parent's children array, removes from rootIds if applicable
-  - [ ] 2.4 Implement `moveTab(tabId, newParentId, index)` — removes from old parent, adds to new parent at index, updates rootIds
-  - [ ] 2.5 Implement `updateTab(tabId, changes)` — merges partial updates (title, url, favicon, status, etc.)
-  - [ ] 2.6 Implement `toggleCollapse(tabId)` — toggles collapsed Set membership
-  - [ ] 2.7 Implement query methods: `getChildren(tabId)`, `getDescendants(tabId)` (recursive), `getRoots()`, `getTab(tabId)`
-  - [ ] 2.8 Implement `toSerializable()` — converts Map/Set to plain objects for `chrome.storage.local`
-  - [ ] 2.9 Implement `static fromStorage(data)` — reconstructs ShadowState from serialized data
-  - [ ] 2.10 Implement `reconcileWithLiveTabs(liveTabs)` — removes dead tabs, adds new tabs at root, updates metadata from live data
-  - [ ] 2.11 Verify: Import ShadowState in background.js, create instance, add/remove/move tabs in console, confirm tree integrity
+- [x] 2.0 Shadow State data layer
+  - [x] 2.1 Create `shared/shadow-state.js` — implement `ShadowState` class with `tabs` Map, `rootIds` array, `collapsed` Set, `groupColors` object, `theme` string
+  - [x] 2.2 Implement `addTab(tabId, node)` — adds to Map, updates parent's children array or pushes to rootIds
+  - [x] 2.3 Implement `removeTab(tabId)` — reparents children to grandparent (or root), removes from parent's children array, removes from rootIds if applicable
+  - [x] 2.4 Implement `moveTab(tabId, newParentId, index)` — removes from old parent, adds to new parent at index, updates rootIds
+  - [x] 2.5 Implement `updateTab(tabId, changes)` — merges partial updates (title, url, favicon, status, etc.)
+  - [x] 2.6 Implement `toggleCollapse(tabId)` — toggles collapsed Set membership
+  - [x] 2.7 Implement query methods: `getChildren(tabId)`, `getDescendants(tabId)` (recursive), `getRoots()`, `getTab(tabId)`
+  - [x] 2.8 Implement `toSerializable()` — converts Map/Set to plain objects for `chrome.storage.local`
+  - [x] 2.9 Implement `static fromStorage(data)` — reconstructs ShadowState from serialized data
+  - [x] 2.10 Implement `reconcileWithLiveTabs(liveTabs)` — removes dead tabs, adds new tabs at root, updates metadata from live data
+  - [x] 2.11 Verify: Import ShadowState in background.js, create instance, add/remove/move tabs in console, confirm tree integrity (ready for manual verification)
 
 - [ ] 3.0 Background service worker — tab event handling
   - [ ] 3.1 Initialize ShadowState instance on service worker start
