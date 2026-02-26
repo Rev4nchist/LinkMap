@@ -1,0 +1,67 @@
+/* Midnight (Default) */
+[data-theme="midnight"] {
+  --bg-primary: #1a1b2e;
+  --bg-secondary: #232440;
+  --bg-active: #2a2b4a;
+  --text-primary: #e0e0f0;
+  --text-secondary: #8888aa;
+  --text-muted: #555577;
+  --accent: #6c8cff;
+  --border: #2d2e4a;
+  --scrollbar-thumb: #3a3b5a;
+  --scrollbar-track: #1a1b2e;
+  --close-hover: #ff4444;
+  --search-bg: #232440;
+  --search-border: #3a3b5a;
+}
+
+/* OLED */
+[data-theme="oled"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-active: #1a1a1a;
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --text-muted: #444444;
+  --accent: #00aaff;
+  --border: #222222;
+  --scrollbar-thumb: #333333;
+  --scrollbar-track: #000000;
+  --close-hover: #ff4444;
+  --search-bg: #0a0a0a;
+  --search-border: #333333;
+}
+
+/* Dracula */
+[data-theme="dracula"] {
+  --bg-primary: #282a36;
+  --bg-secondary: #2d2f3d;
+  --bg-active: #44475a;
+  --text-primary: #f8f8f2;
+  --text-secondary: #bd93f9;
+  --text-muted: #6272a4;
+  --accent: #ff79c6;
+  --border: #44475a;
+  --scrollbar-thumb: #555770;
+  --scrollbar-track: #282a36;
+  --close-hover: #ff5555;
+  --search-bg: #2d2f3d;
+  --search-border: #555770;
+}
+
+/* Nord */
+[data-theme="nord"] {
+  --bg-primary: #2e3440;
+  --bg-secondary: #3b4252;
+  --bg-active: #434c5e;
+  --text-primary: #eceff4;
+  --text-secondary: #81a1c1;
+  --text-muted: #4c566a;
+  --accent: #88c0d0;
+  --border: #3b4252;
+  --scrollbar-thumb: #4c566a;
+  --scrollbar-track: #2e3440;
+  --close-hover: #bf616a;
+  --search-bg: #3b4252;
+  --search-border: #4c566a;
+}

@@ -1,0 +1,163 @@
+/* Tree container */
+#tree-container {
+  padding: 4px 0;
+}
+
+/* Tab entry */
+.tab-entry {
+  display: flex;
+  align-items: center;
+  padding: 4px 12px;
+  cursor: pointer;
+  user-select: none;
+  gap: 6px;
+  min-height: 28px;
+  position: relative;
+}
+
+.tab-entry:hover {
+  background: var(--bg-secondary);
+}
+
+.tab-entry[data-active="true"] {
+  background: var(--bg-active);
+}
+
+/* Favicon */
+.tab-favicon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+/* Tab title */
+.tab-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+/* Tab URL (shown on hover or as subtitle) */
+.tab-url {
+  display: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Close button */
+.tab-close {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tab-entry:hover .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--close-hover);
+  color: white;
+}
+
+/* Collapse chevron */
+.tab-chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 2px;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.tab-chevron:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.tab-chevron[data-collapsed="true"] {
+  transform: rotate(-90deg);
+}
+
+/* Tree indentation */
+.tab-children {
+  position: relative;
+}
+
+/* Tree connector lines */
+.tab-children::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+/* Indent per level */
+.tab-entry[data-depth="1"] { padding-left: 28px; }
+.tab-entry[data-depth="2"] { padding-left: 44px; }
+.tab-entry[data-depth="3"] { padding-left: 60px; }
+.tab-entry[data-depth="4"] { padding-left: 76px; }
+.tab-entry[data-depth="5"] { padding-left: 92px; }
+
+/* Status indicators */
+.tab-loading {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.tab-audible::after {
+  content: '🔊';
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+/* Pinned tabs */
+#pinned-tabs {
+  border-bottom: 1px solid var(--border);
+}
+
+#pinned-list {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  gap: 4px;
+}
+
+.pinned-tab {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pinned-tab:hover {
+  background: var(--bg-secondary);
+}

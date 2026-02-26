@@ -43,19 +43,19 @@ Update the file after completing each sub-task, not just after completing an ent
 
 ## Tasks
 
-- [ ] 0.0 Create feature branch
-  - [ ] 0.1 Create and checkout branch: `git checkout -b feature/linkmap-v1`
+- [x] 0.0 Create feature branch
+  - [x] 0.1 Create and checkout branch: `git checkout -b feature/linkmap-v1`
 
-- [ ] 1.0 Extension scaffold & manifest
-  - [ ] 1.1 Create directory structure: `icons/`, `shared/`, `sidepanel/modules/`, `sidepanel/styles/`, `vendor/`
-  - [ ] 1.2 Create `manifest.json` with MV3 config: permissions (`tabs`, `sidePanel`, `storage`, `tabGroups`), service worker (`background.js` type module), side panel (`sidepanel/sidepanel.html`), action button, icons
-  - [ ] 1.3 Create placeholder icon PNGs (16, 32, 48, 128) — simple colored square or letter "L"
-  - [ ] 1.4 Create `shared/constants.js` — export message types (`STATE_UPDATE`, `TAB_ACTIVATED`, `GET_STATE`, `ACTIVATE_TAB`, `CLOSE_TAB`, `MOVE_TAB`, `TOGGLE_COLLAPSE`, `SET_THEME`, `SET_GROUP_COLOR`, etc.), storage key (`linkmap_state`), theme names array
-  - [ ] 1.5 Create `shared/utils.js` — export `debounce(fn, ms)`, `generateId()`, DOM helper `el(tag, attrs, children)`
-  - [ ] 1.6 Create minimal `background.js` — imports constants, logs "LinkMap background started", registers `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`
-  - [ ] 1.7 Create minimal `sidepanel/sidepanel.html` — HTML5 boilerplate, links CSS files, loads `sidepanel.js` as module, has container divs for header/tree/footer
-  - [ ] 1.8 Create minimal `sidepanel/sidepanel.js` — logs "Side panel loaded", sends `GET_STATE` message to background
-  - [ ] 1.9 Verify: Load extension in Chrome dev mode, click icon, side panel opens with blank page, console shows log messages from both background and side panel
+- [x] 1.0 Extension scaffold & manifest
+  - [x] 1.1 Create directory structure: `icons/`, `shared/`, `sidepanel/modules/`, `sidepanel/styles/`, `vendor/`
+  - [x] 1.2 Create `manifest.json` with MV3 config: permissions (`tabs`, `sidePanel`, `storage`, `tabGroups`), service worker (`background.js` type module), side panel (`sidepanel/sidepanel.html`), action button, icons
+  - [x] 1.3 Create placeholder icon PNGs (16, 32, 48, 128) — simple colored square or letter "L"
+  - [x] 1.4 Create `shared/constants.js` — export message types (`STATE_UPDATE`, `TAB_ACTIVATED`, `GET_STATE`, `ACTIVATE_TAB`, `CLOSE_TAB`, `MOVE_TAB`, `TOGGLE_COLLAPSE`, `SET_THEME`, `SET_GROUP_COLOR`, etc.), storage key (`linkmap_state`), theme names array
+  - [x] 1.5 Create `shared/utils.js` — export `debounce(fn, ms)`, `generateId()`, DOM helper `el(tag, attrs, children)`
+  - [x] 1.6 Create minimal `background.js` — imports constants, logs "LinkMap background started", registers `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`
+  - [x] 1.7 Create minimal `sidepanel/sidepanel.html` — HTML5 boilerplate, links CSS files, loads `sidepanel.js` as module, has container divs for header/tree/footer
+  - [x] 1.8 Create minimal `sidepanel/sidepanel.js` — logs "Side panel loaded", sends `GET_STATE` message to background
+  - [x] 1.9 Verify: Load extension in Chrome dev mode, click icon, side panel opens with blank page, console shows log messages from both background and side panel (ready for manual verification)
 
 - [ ] 2.0 Shadow State data layer
   - [ ] 2.1 Create `shared/shadow-state.js` — implement `ShadowState` class with `tabs` Map, `rootIds` array, `collapsed` Set, `groupColors` object, `theme` string

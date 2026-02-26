@@ -5,8 +5,8 @@
   "attempts": 1,
   "failures": [],
   "candidate_turn": null,
-  "last_edit_content": "# LinkMap - Project Instructions\n\n## Overview\nChrome Extension: Vertical Tabs & Link Map with tree-style visualization and deep theming engine. Side-panel UX.\n\n## Stack\n- Chrome Extension (Manifest V3)\n- Vanilla JavaScript (ES Modules) — no framework, no build step\n- CSS Custom Properties for theming\n- Side Panel API\n\n## Project Structure\n```\nmanifest.json           # Extension manifest (MV3)\nbackground.js           # Service worker — Shadow State, tab events\nshared/\n  shadow-state.js       # Sh",
+  "last_edit_content": "- [x] 0.0 Create feature branch\n  - [x] 0.1 Create and checkout branch: `git checkout -b feature/linkmap-v1`\n\n- [x] 1.0 Extension scaffold & manifest\n  - [x] 1.1 Create directory structure: `icons/`, `shared/`, `sidepanel/modules/`, `sidepanel/styles/`, `vendor/`\n  - [x] 1.2 Create `manifest.json` with MV3 config: permissions (`tabs`, `sidePanel`, `storage`, `tabGroups`), service worker (`background.js` type module), side panel (`sidepanel/sidepanel.html`), action button, icons\n  - [x] 1.3 Creat",
   "test_command": null,
   "context": "Editing ROADMAP.md",
-  "current_turn": 23
+  "current_turn": 39
 }

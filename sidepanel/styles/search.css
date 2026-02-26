@@ -1,0 +1,33 @@
+.search-container {
+  flex: 1;
+}
+
+#search-input {
+  width: 100%;
+  background: var(--search-bg);
+  border: 1px solid var(--search-border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+#search-input:focus {
+  border-color: var(--accent);
+}
+
+#search-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Search results (flat list mode) */
+.search-results .tab-entry {
+  padding-left: 12px !important;
+}
+
+.search-match {
+  color: var(--accent);
+  font-weight: 600;
+}
