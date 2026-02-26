@@ -9,6 +9,7 @@ import { MSG } from '../shared/constants.js';
 import { renderTree } from './modules/tree-renderer.js';
 import { showContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
 import { initSearch } from './modules/search.js';
+import { initDragDrop } from './modules/drag-drop.js';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -27,6 +28,12 @@ const themeSelect = document.getElementById('theme-select');
 
 let currentState = null;
 let currentActiveTabId = null;
+
+// ---------------------------------------------------------------------------
+// Drag & Drop
+// ---------------------------------------------------------------------------
+
+initDragDrop(treeContainer);
 
 // ---------------------------------------------------------------------------
 // Search

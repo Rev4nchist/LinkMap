@@ -263,11 +263,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       chrome.tabs.remove(payload.tabIds);
       break;
 
-    case MSG.MOVE_TAB:
-      state.moveTab(payload.tabId, payload.newParentId, payload.index);
+    case MSG.MOVE_TAB: {
+      const { tabId, newParentId, targetTabId, position } = payload;
+
+      if (position === 'child') {
+        // Reparent: make tabId a child of newParentId (which is targetTabId)
+        state.moveTab(tabId, newParentId, 0);
+      } else if (position === 'before' || position === 'after') {
+        // Reorder: place before/after targetTabId at the same level
+        const parentId = newParentId;
+        const siblings = parentId != null
+          ? (state.getTab(parentId)?.children || [])
+          : state.rootIds;
+        let targetIndex = siblings.indexOf(targetTabId);
+        if (targetIndex === -1) targetIndex = siblings.length;
+        if (position === 'after') targetIndex++;
+        // If moving within same parent and currently before target, adjust
+        const currentParent = state.getTab(tabId)?.parentId ?? null;
+        if (currentParent === parentId) {
+          const currentIndex = siblings.indexOf(tabId);
+          if (currentIndex !== -1 && currentIndex < targetIndex) {
+            targetIndex--;
+          }
+        }
+        state.moveTab(tabId, parentId, targetIndex);
+      } else {
+        // Legacy format: { tabId, newParentId, index }
+        state.moveTab(tabId, newParentId, payload.index ?? 0);
+      }
+
       saveState();
       broadcastState();
       break;
+    }
 
     case MSG.TOGGLE_COLLAPSE:
       state.toggleCollapse(payload.tabId);

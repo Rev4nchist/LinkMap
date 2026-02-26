@@ -130,6 +130,7 @@ function buildTabEntry(tab, depth, collapsedSet, activeTabId, groupColors) {
 
   const entry = el('div', {
     className: entryClasses,
+    draggable: 'true',
     dataset: {
       tabId: String(tab.tabId),
       depth: String(depth),

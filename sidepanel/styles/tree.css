@@ -161,3 +161,46 @@
 .pinned-tab:hover {
   background: var(--bg-secondary);
 }
+
+/* Drag and drop */
+.tab-entry[draggable="true"] {
+  cursor: grab;
+}
+
+.tab-entry.dragging {
+  opacity: 0.4;
+}
+
+.drop-indicator {
+  position: fixed;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 100;
+  border-radius: 1px;
+}
+
+.drop-indicator::before,
+.drop-indicator::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  top: -2px;
+}
+
+.drop-indicator::before {
+  left: -3px;
+}
+
+.drop-indicator::after {
+  right: -3px;
+}
+
+.drop-target-child {
+  background: var(--bg-active) !important;
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}

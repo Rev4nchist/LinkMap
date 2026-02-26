@@ -127,14 +127,14 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 7.7 Escape key or clear button → restore tree view
   - [x] 7.8 Verify: Type partial tab title, matching tabs appear, non-matches hidden, click switches to tab, escape restores tree (ready for manual verification)
 
-- [ ] 8.0 Drag & drop
-  - [ ] 8.1 Create `sidepanel/modules/drag-drop.js` — export `initDragDrop(container, onReorder, onReparent)`
-  - [ ] 8.2 Choose approach: SortableJS (download to `vendor/` or CDN link) or native HTML5 DnD
-  - [ ] 8.3 Implement reorder — drag tab to new position within same level, show insertion line indicator
-  - [ ] 8.4 Implement reparent — drag tab onto another tab (hover 500ms or drop on target), show highlight indicator, nest as child
-  - [ ] 8.5 On drop: send `MOVE_TAB` message to background with `{ tabId, newParentId, index }`
-  - [ ] 8.6 Background handles `MOVE_TAB` — update ShadowState, save, broadcast
-  - [ ] 8.7 Verify: Drag tab to reorder, drag tab onto another to nest it, tree updates correctly, persists after restart
+- [x] 8.0 Drag & drop
+  - [x] 8.1 Create `sidepanel/modules/drag-drop.js` — export `initDragDrop(container)` using native HTML5 DnD
+  - [x] 8.2 Choose approach: native HTML5 DnD (no SortableJS dependency)
+  - [x] 8.3 Implement reorder — drag tab to new position within same level, show insertion line indicator
+  - [x] 8.4 Implement reparent — drag tab onto another tab (middle 50% zone), show highlight indicator, nest as child
+  - [x] 8.5 On drop: send `MOVE_TAB` message to background with `{ tabId, newParentId, targetTabId, position }`
+  - [x] 8.6 Background handles `MOVE_TAB` — enhanced handler with before/after/child positioning logic
+  - [x] 8.7 Verify: Drag tab to reorder, drag tab onto another to nest it, tree updates correctly, persists after restart (ready for manual verification)
 
 - [x] 9.0 Tab group color customization
   - [x] 9.1 Detect tab groups via `tab.groupId` — render group header/divider in tree
