@@ -7,6 +7,7 @@
 
 import { fuzzyMatch, el, debounce } from '../../shared/utils.js';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
+import { DEFAULT_FAVICON } from './tree-renderer.js';
 
 /**
  * Initialize search functionality.
@@ -108,7 +109,7 @@ export function renderSearchResults(results, container) {
   const elements = results.map(({ tab, tabId, titleMatch, urlMatch }) => {
     const favicon = el('img', {
       className: 'tab-favicon',
-      src: tab.favIconUrl || '',
+      src: tab.favIconUrl || DEFAULT_FAVICON,
       width: '16',
       height: '16',
       alt: ''

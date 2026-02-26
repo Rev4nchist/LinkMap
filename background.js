@@ -340,8 +340,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     default:
       console.log(`[LinkMap] Unknown message type: ${type}`);
   }
-
-  return true; // Keep channel open for async responses
 });
 
 // ---------------------------------------------------------------------------

@@ -43,11 +43,24 @@ export function showContextMenu(tabId, x, y) {
   }));
 
   items.push(menuItem('Close Tabs Below', () => {
-    const rootIds = currentState.rootIds;
-    const idx = rootIds.indexOf(tabId);
+    // Build flat visible order via full tree walk (handles nested tabs)
+    const visibleOrder = [];
+    const walkTree = (ids) => {
+      for (const id of ids) {
+        const t = currentState.tabs[id];
+        if (!t) continue;
+        visibleOrder.push(id);
+        if (t.children && t.children.length > 0) {
+          walkTree(t.children);
+        }
+      }
+    };
+    walkTree(currentState.rootIds);
+
+    const idx = visibleOrder.indexOf(tabId);
     if (idx >= 0) {
-      const belowIds = rootIds.slice(idx + 1);
-      actions.closeTabs(belowIds);
+      const belowIds = visibleOrder.slice(idx + 1);
+      if (belowIds.length > 0) actions.closeTabs(belowIds);
     }
   }));
 

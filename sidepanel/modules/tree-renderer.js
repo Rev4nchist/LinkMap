@@ -8,7 +8,7 @@
 import { el } from '../../shared/utils.js';
 
 /** Default favicon for tabs with missing or empty favIconUrl. */
-const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
+export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
   '<circle cx="8" cy="8" r="6" fill="#666"/>' +
   '</svg>'
