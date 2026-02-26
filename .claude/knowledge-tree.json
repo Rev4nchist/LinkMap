@@ -1,0 +1,68 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-02-26T00:06:21.280289+00:00",
+  "project": {
+    "name": "LinkMap",
+    "description": "",
+    "type": "unknown",
+    "stack": []
+  },
+  "structure": {
+    "root": "C:\\Users\\david.hayes\\Projects\\LinkMap",
+    "directories": {
+      ".claude/": {
+        "purpose": "JSON data/config",
+        "key_files": null
+      }
+    }
+  },
+  "components": [],
+  "navigation": {
+    "common_tasks": {},
+    "entry_points": {}
+  },
+  "goals": {
+    "source": "ROADMAP.md",
+    "current": {
+      "title": "Project Setup & Planning",
+      "description": "Initialize project infrastructure; Create PRD and task list; Started: 2026-02-25"
+    },
+    "completed": [
+      {
+        "title": "Project initialization",
+        "completed": "2026-02-25"
+      }
+    ],
+    "planned": [
+      {
+        "title": "PRD creation",
+        "priority": "high"
+      },
+      {
+        "title": "Task list breakdown",
+        "priority": "high"
+      },
+      {
+        "title": "Core extension scaffold",
+        "priority": "high"
+      },
+      {
+        "title": "Vertical tabs panel",
+        "priority": "high"
+      },
+      {
+        "title": "Tree-style visualization",
+        "priority": "high"
+      },
+      {
+        "title": "Theming engine",
+        "priority": "medium"
+      }
+    ]
+  },
+  "critical_info": {
+    "claude_config": "CLAUDE.md"
+  },
+  "_stale": true,
+  "_invalidated_at": "2026-02-26T00:15:26.446Z"
+}

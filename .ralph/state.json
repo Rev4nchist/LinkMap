@@ -1,0 +1,9 @@
+{
+  "active": true,
+  "phase": "planning",
+  "feature": "linkmap-vertical-tabs",
+  "started": "2026-02-25",
+  "iteration": 0,
+  "max_iterations": 30,
+  "mode": "HITL"
+}
