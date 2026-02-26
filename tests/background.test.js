@@ -393,6 +393,7 @@ describe('tabs.onRemoved handler', () => {
       {},
       (data) => { response = data; }
     );
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.equal(response.activeTabId, null, 'activeTabId cleared after removing active tab');
   });
@@ -563,6 +564,7 @@ describe('tabs.onActivated handler', () => {
     const listener = chromeMock._listeners['runtime.onMessage'][0];
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
     assert.equal(response.activeTabId, 99);
   });
 });
@@ -631,6 +633,7 @@ describe('tabs.onDetached handler', () => {
     const listener = chromeMock._listeners['runtime.onMessage'][0];
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
     assert.ok(response.tabs[1], 'tab still exists after detach');
   });
 });
@@ -667,6 +670,7 @@ describe('message handler', () => {
       {},
       (data) => { response = data; }
     );
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.ok(response, 'sendResponse was called');
     assert.ok(response.tabs, 'response has tabs');
@@ -782,6 +786,7 @@ describe('message handler', () => {
     // Verify via GET_STATE
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
     assert.ok(response.collapsed.includes(1), 'tab 1 is now collapsed');
 
     // Toggle again
@@ -795,6 +800,7 @@ describe('message handler', () => {
 
     response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
     assert.ok(!response.collapsed.includes(1), 'tab 1 is no longer collapsed');
   });
 
@@ -814,6 +820,7 @@ describe('message handler', () => {
     // Verify theme changed via GET_STATE
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
     assert.equal(response.theme, 'nord', 'theme updated to nord');
 
     // Verify THEME_CHANGED broadcast
@@ -921,6 +928,7 @@ describe('getStatePayload structure', () => {
     const listener = chromeMock._listeners['runtime.onMessage'][0];
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.ok(!(response.tabs instanceof Map), 'tabs is not a Map');
     assert.ok(typeof response.tabs === 'object', 'tabs is a plain object');
@@ -932,6 +940,7 @@ describe('getStatePayload structure', () => {
     const listener = chromeMock._listeners['runtime.onMessage'][0];
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.ok(Array.isArray(response.collapsed), 'collapsed is an array');
   });
@@ -942,6 +951,7 @@ describe('getStatePayload structure', () => {
     const listener = chromeMock._listeners['runtime.onMessage'][0];
     let response = null;
     listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.ok(typeof response.groupColors === 'object', 'groupColors is an object');
   });

@@ -106,6 +106,7 @@ async function init() {
 
     // 5. Save reconciled state
     saveState();
+    broadcastState();
 
     console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs`);
   } catch (err) {
@@ -248,8 +249,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   switch (type) {
     case MSG.GET_STATE:
-      sendResponse(getStatePayload());
-      break;
+      initDone.then(() => {
+        sendResponse(getStatePayload());
+      });
+      return true; // keep channel open for async response
 
     case MSG.ACTIVATE_TAB:
       chrome.tabs.update(payload.tabId, { active: true });
@@ -351,6 +354,6 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 // Start
 // ---------------------------------------------------------------------------
 
-init();
+const initDone = init();
 
 console.log('[LinkMap] Background service worker started');
