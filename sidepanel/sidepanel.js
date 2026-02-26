@@ -7,6 +7,7 @@
 
 import { MSG } from '../shared/constants.js';
 import { renderTree } from './modules/tree-renderer.js';
+import { showContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -68,6 +69,7 @@ function handleStateUpdate(payload) {
 
   currentState = payload;
   currentActiveTabId = payload.activeTabId ?? currentActiveTabId;
+  setContextMenuState(currentState);
 
   // Apply theme
   if (payload.theme) {
@@ -129,6 +131,15 @@ treeContainer.addEventListener('auxclick', (e) => {
   chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } });
 });
 
+// Right-click context menu
+treeContainer.addEventListener('contextmenu', (e) => {
+  const tabEntry = e.target.closest('.tab-entry');
+  if (!tabEntry) return;
+  e.preventDefault();
+  const tabId = Number(tabEntry.dataset.tabId);
+  showContextMenu(tabId, e.clientX, e.clientY);
+});
+
 // ---------------------------------------------------------------------------
 // Event Delegation — Pinned Tabs
 // ---------------------------------------------------------------------------
@@ -138,6 +149,15 @@ pinnedList.addEventListener('click', (e) => {
   if (!pinnedTab) return;
   const tabId = Number(pinnedTab.dataset.tabId);
   chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } });
+});
+
+// Right-click context menu on pinned tabs
+pinnedList.addEventListener('contextmenu', (e) => {
+  const pinnedTab = e.target.closest('.pinned-tab');
+  if (!pinnedTab) return;
+  e.preventDefault();
+  const tabId = Number(pinnedTab.dataset.tabId);
+  showContextMenu(tabId, e.clientX, e.clientY);
 });
 
 // ---------------------------------------------------------------------------

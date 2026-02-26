@@ -98,15 +98,15 @@ Update the file after completing each sub-task, not just after completing an ent
   - [x] 4.11 Implement collapse/expand — click chevron sends `TOGGLE_COLLAPSE` to background, re-render hides children of collapsed nodes
   - [x] 4.12 Verify: Open side panel, tabs appear in tree structure, new tabs nest correctly under parents, collapse/expand works, active tab highlighted (ready for manual verification)
 
-- [ ] 5.0 Tab actions & interactions
-  - [ ] 5.1 Create `sidepanel/modules/tab-actions.js` — export click handlers
-  - [ ] 5.2 Click tab → send `ACTIVATE_TAB` → Chrome switches to that tab
-  - [ ] 5.3 Click close button → send `CLOSE_TAB` → tab closes, tree updates
-  - [ ] 5.4 Middle-click tab → same as close
-  - [ ] 5.5 Create `sidepanel/modules/context-menu.js` — custom right-click menu
-  - [ ] 5.6 Context menu options: Close, Close Other Tabs, Close Tabs to Right, Duplicate, Pin/Unpin, Mute/Unmute
-  - [ ] 5.7 Style context menu with theme variables, position near cursor, dismiss on click outside
-  - [ ] 5.8 Verify: All tab actions work correctly, context menu appears and functions
+- [x] 5.0 Tab actions & interactions
+  - [x] 5.1 Create `sidepanel/modules/tab-actions.js` — export click handlers
+  - [x] 5.2 Click tab → send `ACTIVATE_TAB` → Chrome switches to that tab
+  - [x] 5.3 Click close button → send `CLOSE_TAB` → tab closes, tree updates
+  - [x] 5.4 Middle-click tab → same as close
+  - [x] 5.5 Create `sidepanel/modules/context-menu.js` — custom right-click menu
+  - [x] 5.6 Context menu options: Close, Close Other Tabs, Close Tabs to Right, Duplicate, Pin/Unpin, Mute/Unmute
+  - [x] 5.7 Style context menu with theme variables, position near cursor, dismiss on click outside
+  - [x] 5.8 Verify: All tab actions work correctly, context menu appears and functions (ready for manual verification)
 
 - [x] 6.0 Theming engine
   - [x] 6.1 Create `sidepanel/styles/themes.css` — define CSS custom properties for all 4 themes using `[data-theme="name"]` selectors (Midnight, OLED, Dracula, Nord)
