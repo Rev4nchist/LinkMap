@@ -21,6 +21,9 @@ const DEBUG = false;
 /** @type {ShadowState} */
 let state = new ShadowState();
 
+/** True once init() has finished — guards event listeners from corrupting state during startup. */
+let initComplete = false;
+
 /** @type {number|null} Currently active tab ID */
 let activeTabId = null;
 
@@ -190,6 +193,7 @@ async function init() {
     // 8. Broadcast complete state (after all data loaded)
     broadcastState();
 
+    initComplete = true;
     console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs, ${state.groups.size} groups`);
   } catch (err) {
     console.error('[LinkMap] Init error:', err);
@@ -628,12 +632,13 @@ const visitCountCache = new Map();
  */
 async function getVisitCount(url) {
   if (!url) return 0;
-  if (visitCountCache.has(url)) return visitCountCache.get(url);
+  const cached = visitCountCache.get(url);
+  if (cached && Date.now() - cached.time < 300000) return cached.count;
 
   try {
     const visits = await chrome.history.getVisits({ url });
     const count = visits.length;
-    visitCountCache.set(url, count);
+    visitCountCache.set(url, { count, time: Date.now() });
     return count;
   } catch {
     return 0;
@@ -706,6 +711,7 @@ const RELEVANT_CHANGE_FIELDS = new Set([
  * chrome.tabs.onCreated — A new tab was created.
  */
 chrome.tabs.onCreated.addListener((tab) => {
+  if (!initComplete) return;
   const node = {
     tabId: tab.id,
     parentId: tab.openerTabId || null,
@@ -735,6 +741,7 @@ chrome.tabs.onCreated.addListener((tab) => {
  * chrome.tabs.onRemoved — A tab was closed.
  */
 chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
+  if (!initComplete) return;
   state.removeTab(tabId);
   invalidateDuplicateMap();
 
@@ -756,6 +763,7 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
  * Only processes updates with relevant fields.
  */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
+  if (!initComplete) return;
   // Filter: only act on relevant changes
   const hasRelevant = Object.keys(changeInfo).some((key) =>
     RELEVANT_CHANGE_FIELDS.has(key)
@@ -816,6 +824,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
  * chrome.tabs.onMoved — A tab was moved in the tab strip.
  */
 chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
+  if (!initComplete) return;
   state.updateTab(tabId, { index: moveInfo.toIndex });
   saveState();
   broadcastState();
@@ -845,6 +854,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
  * chrome.tabs.onAttached — A tab was attached to a window.
  */
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+  if (!initComplete) return;
   state.updateTab(tabId, {
     windowId: attachInfo.newWindowId,
     index: attachInfo.newPosition,
@@ -860,6 +870,7 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
  * v1: Single-window focus — just log it, don't remove the tab.
  */
 chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
+  if (!initComplete) return;
   DEBUG && console.log(`[LinkMap] Tab detached: ${tabId} from window ${detachInfo.oldWindowId}`);
   saveState();
   broadcastState();
@@ -898,6 +909,7 @@ function normalizeUrl(url) {
     // Remove tracking params
     const trackingParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'ref', 'fbclid', 'gclid'];
     for (const p of trackingParams) u.searchParams.delete(p);
+    u.searchParams.sort();
     // Remove fragment
     u.hash = '';
     // Remove trailing slash
@@ -964,6 +976,7 @@ function getDuplicateMap() {
  * chrome.tabGroups.onCreated — A tab group was created.
  */
 chrome.tabGroups.onCreated.addListener((group) => {
+  if (!initComplete) return;
   state.addGroup(group);
   saveState();
   broadcastState();
@@ -975,6 +988,7 @@ chrome.tabGroups.onCreated.addListener((group) => {
  * chrome.tabGroups.onUpdated — A tab group's properties changed.
  */
 chrome.tabGroups.onUpdated.addListener((group) => {
+  if (!initComplete) return;
   const updates = {
     title: group.title,
     color: group.color,
@@ -994,6 +1008,7 @@ chrome.tabGroups.onUpdated.addListener((group) => {
  * chrome.tabGroups.onRemoved — A tab group was removed.
  */
 chrome.tabGroups.onRemoved.addListener((group) => {
+  if (!initComplete) return;
   state.removeGroup(group.id);
   saveState();
   broadcastState();

@@ -87,10 +87,12 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
     return a - b;
   });
 
-  // Stable labels: assign by ascending windowId order (independent of sort)
-  const allWindowIds = [...windowBuckets.keys()].sort((a, b) => a - b);
+  // Labels from render order: non-home windows numbered sequentially
   const windowLabels = new Map();
-  allWindowIds.forEach((wid, i) => windowLabels.set(wid, `Window ${i + 1}`));
+  let windowNum = 1;
+  for (const wid of sortedWindowIds) {
+    if (wid !== homeWindowId) windowLabels.set(wid, `Window ${windowNum++}`);
+  }
 
   // Render each window's tabs with separator headers
   for (const wid of sortedWindowIds) {

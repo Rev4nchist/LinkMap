@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-02-26T00:06:21.280289+00:00",
+  "updated_at": "2026-03-05T12:23:17.945708+00:00",
   "project": {
     "name": "LinkMap",
     "description": "",
@@ -13,27 +13,164 @@
       ".claude/": {
         "purpose": "JSON data/config",
         "key_files": null
+      },
+      ".claude\\cache/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      ".claude\\cache\\agents/": {
+        "purpose": "Agent definitions",
+        "key_files": null
+      },
+      ".claude\\cache\\agents\\kraken/": {
+        "purpose": "Markdown documentation",
+        "key_files": null
+      },
+      ".claude\\cache\\agents\\oracle/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      ".claude\\cache\\agents\\spark/": {
+        "purpose": "Markdown documentation",
+        "key_files": null
+      },
+      ".claudedocs/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      ".icon-gen/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      ".ralph/": {
+        "purpose": "JSON data/config",
+        "key_files": null
+      },
+      ".tldr/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      "docs/": {
+        "purpose": "Documentation",
+        "key_files": null
+      },
+      "icon-gen/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      "icons/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      "shared/": {
+        "purpose": "Shared code",
+        "key_files": null
+      },
+      "sidepanel/": {
+        "purpose": "Project directory",
+        "key_files": null
+      },
+      "sidepanel\\modules/": {
+        "purpose": "Application modules",
+        "key_files": null
+      },
+      "sidepanel\\styles/": {
+        "purpose": "Stylesheets",
+        "key_files": null
+      },
+      "tasks/": {
+        "purpose": "Markdown documentation",
+        "key_files": null
+      },
+      "tests/": {
+        "purpose": "Test files",
+        "key_files": null
+      },
+      "vendor/": {
+        "purpose": "Project directory",
+        "key_files": null
       }
     }
   },
   "components": [],
   "navigation": {
-    "common_tasks": {},
+    "common_tasks": {
+      "add_test": [
+        "tests/"
+      ]
+    },
     "entry_points": {}
   },
   "goals": {
     "source": "ROADMAP.md",
-    "current": {
-      "title": "Project Setup & Planning",
-      "description": "Initialize project infrastructure; Create PRD and task list; Started: 2026-02-25"
-    },
+    "current": null,
     "completed": [
+      {
+        "title": "[feat] keyed DOM reconciliation, Add New Tab button, group context menu, dragover throttling (2026-03-05) `e79fc10`",
+        "completed": null
+      },
+      {
+        "title": "[feat] add tab groups, 5 killer features, August Suite themes, and robustness fixes (2026-02-26) `61779b6`",
+        "completed": null
+      },
+      {
+        "title": "[fix] resolve async message channel warning, improve Close Tabs Below for nested tabs, fix search favicon fallback (2026-02-26) `0602ff5`",
+        "completed": null
+      },
+      {
+        "title": "[fix] resolve init race condition — GET_STATE now waits for initialization (2026-02-26) `0bd1b64`",
+        "completed": null
+      },
+      {
+        "title": "Project Setup & Planning",
+        "completed": "2026-02-26"
+      },
+      {
+        "title": "[feat] add drag and drop reordering and reparenting with visual indicators (2026-02-26) `63cdfc1`",
+        "completed": null
+      },
+      {
+        "title": "[feat] add tab group color customization with settings panel (2026-02-26) `7a3a7db`",
+        "completed": null
+      },
+      {
+        "title": "[feat] add fuzzy search with highlighting and flat result list (2026-02-26) `6fa634b`",
+        "completed": null
+      },
+      {
+        "title": "[feat] add tab actions module and custom context menu (2026-02-26) `08d7bc3`",
+        "completed": null
+      },
+      {
+        "title": "[feat] implement side panel tree rendering with event delegation (2026-02-26) `56fd389`",
+        "completed": null
+      },
+      {
+        "title": "[feat] add theme management module (2026-02-26) `3e154a7`",
+        "completed": null
+      },
+      {
+        "title": "[feat] implement background service worker with tab events, persistence, and messaging (2026-02-26) `2f17ead`",
+        "completed": null
+      },
+      {
+        "title": "[feat] implement ShadowState class with tree mutations, serialization, and reconciliation (2026-02-26) `243bb95`",
+        "completed": null
+      },
+      {
+        "title": "[feat] extension scaffold with manifest, shared utils, side panel shell, and theme CSS (2026-02-26) `00aca5b`",
+        "completed": null
+      },
       {
         "title": "Project initialization",
         "completed": "2026-02-25"
       }
     ],
     "planned": [
+      {
+        "title": "PRD: LinkMap — Vertical Tabs & Link Map Chrome Extension [prd-linkmap.md]",
+        "priority": "medium"
+      },
       {
         "title": "PRD creation",
         "priority": "high"
@@ -62,7 +199,5 @@
   },
   "critical_info": {
     "claude_config": "CLAUDE.md"
-  },
-  "_stale": true,
-  "_invalidated_at": "2026-02-26T00:15:26.446Z"
+  }
 }

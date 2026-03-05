@@ -17,12 +17,20 @@ let dropIndicator = null;
 let dropTarget = null;
 let dropMode = null; // 'before' | 'after' | 'child'
 let _dragOverRafId = null; // rAF throttle for dragover
+let _autoScrollRafId = null;
+let _treeContainer = null;
+
+const AUTO_SCROLL_EDGE = 60;   // px from container edge to start auto-scroll
+const AUTO_SCROLL_SPEED = 6;   // px per frame at edge
+const AUTO_SCROLL_ACCEL = 0.8; // speed multiplier as cursor moves further out
 
 /**
  * Initialize drag and drop on the tree container.
  * @param {HTMLElement} container -- #tree-container
  */
 export function initDragDrop(container) {
+  _treeContainer = container;
+
   // Create drop indicator element
   dropIndicator = document.createElement('div');
   dropIndicator.className = 'drop-indicator';
@@ -35,6 +43,9 @@ export function initDragDrop(container) {
   container.addEventListener('dragleave', onDragLeave);
   container.addEventListener('drop', onDrop);
   container.addEventListener('dragend', onDragEnd);
+
+  // Document-level dragover for auto-scroll (works even when cursor leaves container)
+  document.addEventListener('dragover', onDocumentDragOver);
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +387,70 @@ function clearDropTarget() {
   dropMode = null;
 }
 
+// ---------------------------------------------------------------------------
+// Auto-scroll during drag
+// ---------------------------------------------------------------------------
+
+/**
+ * Document-level dragover — auto-scrolls the tree container when cursor is
+ * near or beyond its top/bottom edge. Works even when dragging outside the
+ * sidebar entirely.
+ */
+function onDocumentDragOver(e) {
+  if (draggedTabId === null && draggedGroupId === null) return;
+  if (!_treeContainer) return;
+
+  const rect = _treeContainer.getBoundingClientRect();
+  const cursorY = e.clientY;
+
+  // Distance from top/bottom edge (negative = outside container)
+  const fromTop = cursorY - rect.top;
+  const fromBottom = rect.bottom - cursorY;
+
+  if (fromTop < AUTO_SCROLL_EDGE) {
+    // Cursor near or above top edge — scroll up
+    // Speed increases the further above the edge (negative fromTop = outside)
+    const intensity = Math.min(1, (AUTO_SCROLL_EDGE - fromTop) / AUTO_SCROLL_EDGE);
+    startAutoScroll(-1, intensity);
+  } else if (fromBottom < AUTO_SCROLL_EDGE) {
+    // Cursor near or below bottom edge — scroll down
+    const intensity = Math.min(1, (AUTO_SCROLL_EDGE - fromBottom) / AUTO_SCROLL_EDGE);
+    startAutoScroll(1, intensity);
+  } else {
+    stopAutoScroll();
+  }
+}
+
+function startAutoScroll(direction, intensity) {
+  // Already scrolling in this direction — just update speed via closure
+  if (_autoScrollRafId && _autoScrollDir === direction) {
+    _autoScrollIntensity = intensity;
+    return;
+  }
+  stopAutoScroll();
+  _autoScrollDir = direction;
+  _autoScrollIntensity = intensity;
+
+  function step() {
+    const speed = AUTO_SCROLL_SPEED * (AUTO_SCROLL_ACCEL + _autoScrollIntensity);
+    _treeContainer.scrollTop += speed * _autoScrollDir;
+    _autoScrollRafId = requestAnimationFrame(step);
+  }
+  _autoScrollRafId = requestAnimationFrame(step);
+}
+
+let _autoScrollDir = 0;
+let _autoScrollIntensity = 0;
+
+function stopAutoScroll() {
+  if (_autoScrollRafId) {
+    cancelAnimationFrame(_autoScrollRafId);
+    _autoScrollRafId = null;
+  }
+  _autoScrollDir = 0;
+  _autoScrollIntensity = 0;
+}
+
 function cleanup() {
   // Remove dragging styles
   const dragging = document.querySelector('.dragging');
@@ -384,6 +459,7 @@ function cleanup() {
     dragging.style.opacity = '';
   }
 
+  stopAutoScroll();
   clearDropTarget();
   draggedTabId = null;
   draggedGroupId = null;

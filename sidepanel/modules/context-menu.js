@@ -194,12 +194,13 @@ export function showGroupContextMenu(groupId, x, y) {
   const commitRename = () => {
     if (renameCommitted) return;
     renameCommitted = true;
-    const newTitle = renameInput.value;
+    const newTitle = renameInput.value.trim();
+    if (!newTitle) return;
     // Route through background for reliable state update + Chrome sync
     chrome.runtime.sendMessage({
       type: MSG.RENAME_GROUP,
       payload: { groupId, title: newTitle },
-    }).catch(() => {});
+    }).catch(e => console.warn('[LinkMap]', e));
   };
   renameInput.addEventListener('keydown', (e) => {
     e.stopPropagation();
@@ -230,10 +231,11 @@ export function showGroupContextMenu(groupId, x, y) {
     if (currentHex === hex) swatch.classList.add('active');
     swatch.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (!/^#[0-9a-f]{6}$/i.test(hex)) return;
       chrome.runtime.sendMessage({
         type: MSG.SET_GROUP_COLOR,
         payload: { groupId, color: hex },
-      }).catch(() => {});
+      }).catch(e2 => console.warn('[LinkMap]', e2));
       hideContextMenu();
     });
     themeRow.appendChild(swatch);

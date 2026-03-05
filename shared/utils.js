@@ -63,10 +63,6 @@ export function smartSearch(query, text) {
   return scoredFuzzyMatch(q, t, text);
 }
 
-/** @deprecated Use smartSearch instead */
-export function fuzzyMatch(query, text) {
-  return smartSearch(query, text);
-}
 
 function range(start, length) {
   return Array.from({ length }, (_, i) => start + i);

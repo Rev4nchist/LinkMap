@@ -630,9 +630,13 @@ export class ShadowState {
   /**
    * Synchronizes in-memory state with the actual Chrome tab list.
    *
-   * Two-pass matching for cross-restart resilience:
-   *   Pass 1: Match by tabId (same session, fast path)
-   *   Pass 2: Match unmatched saved tabs by URL fingerprint (cross-restart)
+   * Four-pass matching for cross-restart resilience:
+   *   Pass 1:  Match by tabId (same session, fast path)
+   *   Pass 2:  Match unmatched saved tabs by URL fingerprint (cross-restart)
+   *   Pass 2b: Title-based fallback (URL changed but title preserved — SPAs, redirects)
+   *   Pass 3:  Positional matching within same window (generic URLs like newtab/blank)
+   *
+   * After matching, dead tabs are removed and orphaned children are re-rooted.
    *
    * @param {Object[]} liveTabs - Array from chrome.tabs.query({}).
    */
@@ -693,6 +697,69 @@ export class ShadowState {
       if (idx !== -1) candidates.splice(idx, 1);
     }
 
+    // Pass 2b: Title-based fallback for remaining unmatched tabs
+    const unmatchedSavedP2b = [];
+    for (const [id, node] of this.tabs) {
+      if (!matchedLiveIds.has(id) && !liveById.has(id)) {
+        unmatchedSavedP2b.push([id, node]);
+      }
+    }
+    const unmatchedLiveP2b = liveTabs.filter(t => !matchedLiveIds.has(t.id));
+    const liveByTitle = new Map();
+    for (const tab of unmatchedLiveP2b) {
+      const title = tab.title || '';
+      if (!title || title === 'New Tab') continue;
+      if (!liveByTitle.has(title)) liveByTitle.set(title, []);
+      liveByTitle.get(title).push(tab);
+    }
+    for (const [savedId, savedNode] of unmatchedSavedP2b) {
+      const title = savedNode.title || '';
+      if (!title || title === 'New Tab') continue;
+      const candidates = liveByTitle.get(title);
+      if (!candidates || candidates.length === 0) continue;
+      let best = candidates[0];
+      for (const c of candidates) {
+        if (c.windowId === savedNode.windowId && c.index === savedNode.index) { best = c; break; }
+        if (c.windowId === savedNode.windowId) best = c;
+      }
+      this.replaceTabId(savedId, best.id);
+      matchedLiveIds.add(best.id);
+      const idx = candidates.indexOf(best);
+      if (idx !== -1) candidates.splice(idx, 1);
+    }
+
+    // Pass 3: Positional matching for generic/remaining unmatched tabs
+    const unmatchedLiveP3 = liveTabs.filter(t => !matchedLiveIds.has(t.id));
+    const liveByWindow = new Map();
+    for (const tab of unmatchedLiveP3) {
+      if (!liveByWindow.has(tab.windowId)) liveByWindow.set(tab.windowId, []);
+      liveByWindow.get(tab.windowId).push(tab);
+    }
+    for (const tabs of liveByWindow.values()) {
+      tabs.sort((a, b) => a.index - b.index);
+    }
+    const unmatchedSavedP3 = [];
+    for (const [id, node] of this.tabs) {
+      if (!matchedLiveIds.has(id) && !liveById.has(id)) {
+        unmatchedSavedP3.push([id, node]);
+      }
+    }
+    for (const [savedId, savedNode] of unmatchedSavedP3) {
+      const windowTabs = liveByWindow.get(savedNode.windowId);
+      if (!windowTabs || windowTabs.length === 0) continue;
+      let bestIdx = 0;
+      let bestDist = Math.abs(windowTabs[0].index - savedNode.index);
+      for (let i = 1; i < windowTabs.length; i++) {
+        const dist = Math.abs(windowTabs[i].index - savedNode.index);
+        if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+      }
+      if (bestDist <= 3) {  // Only match if within 3 positions
+        this.replaceTabId(savedId, windowTabs[bestIdx].id);
+        matchedLiveIds.add(windowTabs[bestIdx].id);
+        windowTabs.splice(bestIdx, 1);
+      }
+    }
+
     // (a) Remove dead tabs (saved tabs with no live match).
     const deadIds = [];
     for (const id of this.tabs.keys()) {
@@ -700,6 +767,13 @@ export class ShadowState {
     }
     for (const id of deadIds) {
       this.removeTab(id);
+    }
+
+    // Orphan repair: fix parentId references to non-existent tabs
+    for (const [id, node] of this.tabs) {
+      if (node.parentId != null && !this.tabs.has(node.parentId)) {
+        node.parentId = null;
+      }
     }
 
     // (b) Update existing / add new.

@@ -8,6 +8,7 @@ A high-end Chrome Extension that combines vertical tab management with tree-styl
 _No current goal. Run /init-project or start a new PRD._
 
 ## Completed
+- [x] [feat] keyed DOM reconciliation, Add New Tab button, group context menu, dragover throttling (2026-03-05) `e79fc10`
 - [x] [feat] add tab groups, 5 killer features, August Suite themes, and robustness fixes (2026-02-26) `61779b6`
 - [x] [fix] resolve async message channel warning, improve Close Tabs Below for nested tabs, fix search favicon fallback (2026-02-26) `0602ff5`
 - [x] [fix] resolve init race condition — GET_STATE now waits for initialization (2026-02-26) `0bd1b64`

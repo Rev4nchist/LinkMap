@@ -15,6 +15,7 @@ import { undoCloseTab, toggleSessionManager, toggleRecentlyClosed, closeSessionM
 import { toggleCommandPalette, setCommandPaletteState, closeCommandPalette } from './modules/command-palette.js';
 import { initWorkspaceUI, setWorkspaceState, getActiveWorkspaceTabIds } from './modules/workspace-ui.js';
 
+
 // ---------------------------------------------------------------------------
 // DOM refs
 // ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ let collapsedWindowIds = new Set();
 let selectedTabIds = new Set();
 
 // Query the side panel's own window once at init (stable, never changes)
-chrome.windows.getCurrent().then(win => { homeWindowId = win.id; });
+const homeWindowReady = chrome.windows.getCurrent().then(win => { homeWindowId = win.id; });
 
 // ---------------------------------------------------------------------------
 // Drag & Drop
@@ -55,6 +56,7 @@ chrome.windows.getCurrent().then(win => { homeWindowId = win.id; });
 
 initDragDrop(treeContainer);
 initPinnedDragDrop(pinnedList);
+
 
 // ---------------------------------------------------------------------------
 // Workspaces
@@ -93,13 +95,15 @@ searchInput.addEventListener('keydown', (e) => {
 // Initialization
 // ---------------------------------------------------------------------------
 
-// Request state from background
-chrome.runtime.sendMessage({ type: MSG.GET_STATE }, (response) => {
-  if (chrome.runtime.lastError) {
-    console.error('[LinkMap] Failed to get state:', chrome.runtime.lastError.message);
-    return;
-  }
-  handleStateUpdate(response);
+// Request state from background — wait for homeWindowId to resolve first
+homeWindowReady.then(() => {
+  chrome.runtime.sendMessage({ type: MSG.GET_STATE }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error('[LinkMap] Failed to get state:', chrome.runtime.lastError.message);
+      return;
+    }
+    handleStateUpdate(response);
+  });
 });
 
 // ---------------------------------------------------------------------------
