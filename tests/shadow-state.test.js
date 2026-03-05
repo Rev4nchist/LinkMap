@@ -738,3 +738,110 @@ describe('Edge cases', () => {
     assert.equal(mod.ShadowState, mod.default);
   });
 });
+
+// ---------------------------------------------------------------------------
+// enforceGroupContiguity
+// ---------------------------------------------------------------------------
+
+describe('ShadowState#enforceGroupContiguity', () => {
+  it('reorders rootIds so same-group tabs are contiguous', () => {
+    const s = new ShadowState();
+    // A(group=5), B(group=7), C(group=5), D(group=7)
+    s.addTab(1, makeTab({ tabId: 1, groupId: 5 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 7 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: 5 }));
+    s.addTab(4, makeTab({ tabId: 4, groupId: 7 }));
+
+    s.enforceGroupContiguity();
+
+    // Group 5 first (A appeared first), then group 7
+    assert.deepEqual(s.rootIds, [1, 3, 2, 4]);
+  });
+
+  it('preserves order when groups are already contiguous', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, groupId: 5 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 5 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: 7 }));
+    s.addTab(4, makeTab({ tabId: 4, groupId: 7 }));
+
+    s.enforceGroupContiguity();
+
+    assert.deepEqual(s.rootIds, [1, 2, 3, 4]);
+  });
+
+  it('handles ungrouped tabs (groupId = -1) as their own group', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, groupId: -1 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 5 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: -1 }));
+    s.addTab(4, makeTab({ tabId: 4, groupId: 5 }));
+
+    s.enforceGroupContiguity();
+
+    // Ungrouped first (tab 1 appeared first), then group 5
+    assert.deepEqual(s.rootIds, [1, 3, 2, 4]);
+  });
+
+  it('handles single tab', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, groupId: 5 }));
+
+    s.enforceGroupContiguity();
+
+    assert.deepEqual(s.rootIds, [1]);
+  });
+
+  it('handles empty rootIds', () => {
+    const s = new ShadowState();
+
+    s.enforceGroupContiguity();
+
+    assert.deepEqual(s.rootIds, []);
+  });
+
+  it('preserves relative order within each group', () => {
+    const s = new ShadowState();
+    // Group 5: tabs 10, 30, 50 (in rootIds order)
+    // Group 7: tabs 20, 40
+    s.addTab(10, makeTab({ tabId: 10, groupId: 5 }));
+    s.addTab(20, makeTab({ tabId: 20, groupId: 7 }));
+    s.addTab(30, makeTab({ tabId: 30, groupId: 5 }));
+    s.addTab(40, makeTab({ tabId: 40, groupId: 7 }));
+    s.addTab(50, makeTab({ tabId: 50, groupId: 5 }));
+
+    s.enforceGroupContiguity();
+
+    // Group 5 first (tab 10 appeared first), internal order: 10, 30, 50
+    // Group 7 second, internal order: 20, 40
+    assert.deepEqual(s.rootIds, [10, 30, 50, 20, 40]);
+  });
+
+  it('handles three interleaved groups', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, groupId: 10 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 20 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: 30 }));
+    s.addTab(4, makeTab({ tabId: 4, groupId: 10 }));
+    s.addTab(5, makeTab({ tabId: 5, groupId: 20 }));
+    s.addTab(6, makeTab({ tabId: 6, groupId: 30 }));
+
+    s.enforceGroupContiguity();
+
+    assert.deepEqual(s.rootIds, [1, 4, 2, 5, 3, 6]);
+  });
+
+  it('skips tabs missing from tabs Map (stale rootIds entries)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, groupId: 5 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 7 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: 5 }));
+    // Manually inject a stale id into rootIds
+    s.rootIds.push(999);
+
+    s.enforceGroupContiguity();
+
+    // Stale id 999 is dropped, groups contiguous
+    assert.deepEqual(s.rootIds, [1, 3, 2]);
+  });
+});

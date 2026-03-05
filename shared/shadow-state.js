@@ -8,11 +8,11 @@
  * Parent-child relationships are maintained via parentId / children[].
  */
 
-import { STORAGE_VERSION, DEFAULT_THEME } from './constants.js';
+import { STORAGE_VERSION, DEFAULT_THEME, UNGROUPED_GROUP_ID } from './constants.js';
 
 // Properties that may be updated via updateTab().
 const MUTABLE_PROPS = [
-  'title', 'url', 'favIconUrl', 'pinned', 'audible',
+  'title', 'url', 'favIconUrl', 'pinned', 'audible', 'muted',
   'status', 'groupId', 'index', 'windowId',
 ];
 
@@ -34,10 +34,11 @@ function createNode(tabId, data) {
     favIconUrl: data.favIconUrl ?? '',
     pinned:     data.pinned ?? false,
     audible:    data.audible ?? false,
+    muted:      data.muted ?? false,
     status:     data.status ?? 'complete',
-    groupId:    data.groupId ?? -1,
+    groupId:    data.groupId ?? UNGROUPED_GROUP_ID,
     index:      data.index ?? 0,
-    windowId:   data.windowId ?? 1,
+    windowId:   data.windowId ?? 0,
   };
 }
 
@@ -76,6 +77,9 @@ export class ShadowState {
    * @param {Object} nodeData
    */
   addTab(tabId, nodeData) {
+    // Duplicate guard — prevent double-insertion of the same tab
+    if (this.tabs.has(tabId)) return;
+
     const node = createNode(tabId, nodeData);
     const parent = node.parentId != null ? this.tabs.get(node.parentId) : null;
 
@@ -140,6 +144,15 @@ export class ShadowState {
   moveTab(tabId, newParentId, index) {
     const node = this.tabs.get(tabId);
     if (!node) return;
+
+    // Cycle detection — abort if newParentId is a descendant of tabId
+    if (newParentId != null) {
+      let ancestor = this.tabs.get(newParentId);
+      while (ancestor) {
+        if (ancestor.tabId === tabId) return; // would create a cycle
+        ancestor = ancestor.parentId != null ? this.tabs.get(ancestor.parentId) : null;
+      }
+    }
 
     // Detach from current location.
     if (node.parentId != null) {
@@ -254,6 +267,41 @@ export class ShadowState {
     this.groupColors[groupId] = color;
   }
 
+  /**
+   * Moves all root-level tabs belonging to a group as a block, positioning
+   * them relative to an anchor tab.
+   *
+   * @param {number} groupId - Group to move.
+   * @param {number} anchorTabId - Tab ID to position relative to.
+   * @param {'before'|'after'} position - Insert before or after the anchor.
+   */
+  moveGroup(groupId, anchorTabId, position) {
+    // Don't move relative to own member
+    const anchorTab = this.tabs.get(anchorTabId);
+    if (anchorTab && anchorTab.groupId === groupId) return;
+
+    // Collect group member IDs in current rootIds order
+    const groupTabIdSet = new Set();
+    for (const id of this.rootIds) {
+      const tab = this.tabs.get(id);
+      if (tab && tab.groupId === groupId) groupTabIdSet.add(id);
+    }
+    if (groupTabIdSet.size === 0) return;
+
+    const groupTabIds = this.rootIds.filter(id => groupTabIdSet.has(id));
+
+    // Remove group tabs from rootIds
+    this.rootIds = this.rootIds.filter(id => !groupTabIdSet.has(id));
+
+    // Find anchor in filtered rootIds
+    let insertIdx = this.rootIds.indexOf(anchorTabId);
+    if (insertIdx === -1) insertIdx = this.rootIds.length;
+    else if (position === 'after') insertIdx++;
+
+    // Insert group block
+    this.rootIds.splice(insertIdx, 0, ...groupTabIds);
+  }
+
   // -----------------------------------------------------------------------
   // Group Mutations
   // -----------------------------------------------------------------------
@@ -280,8 +328,12 @@ export class ShadowState {
    * @param {Object} changes
    */
   updateGroup(groupId, changes) {
-    const group = this.groups.get(groupId);
-    if (!group) return;
+    let group = this.groups.get(groupId);
+    if (!group) {
+      // Upsert: register unknown group (handles onUpdated-before-onCreated race)
+      group = { id: groupId, title: '', color: 'grey', collapsed: false, windowId: undefined };
+      this.groups.set(groupId, group);
+    }
     if ('title' in changes) group.title = changes.title;
     if ('color' in changes) group.color = changes.color;
     if ('collapsed' in changes) group.collapsed = changes.collapsed;
@@ -307,6 +359,12 @@ export class ShadowState {
   replaceTabId(oldId, newId) {
     const node = this.tabs.get(oldId);
     if (!node) return;
+
+    // Collision guard — if newId already exists, remove the stale entry
+    if (this.tabs.has(newId)) {
+      console.warn(`[ShadowState] replaceTabId collision: newId ${newId} already exists, removing stale entry`);
+      this.removeTab(newId);
+    }
 
     // Update the node's own tabId
     node.tabId = newId;
@@ -402,6 +460,66 @@ export class ShadowState {
     return this.rootIds
       .map((id) => this.tabs.get(id))
       .filter(Boolean);
+  }
+
+  /**
+   * Returns all tab IDs belonging to a group, ordered by rootIds position first,
+   * then any nested (non-root) members appended.
+   *
+   * @param {number} groupId
+   * @returns {number[]}
+   */
+  getGroupMemberIds(groupId) {
+    const memberSet = new Set();
+    for (const [id, tab] of this.tabs) {
+      if (tab.groupId === groupId) memberSet.add(id);
+    }
+    // Root-level members in rootIds order first
+    const ordered = [];
+    for (const id of this.rootIds) {
+      if (memberSet.has(id)) ordered.push(id);
+    }
+    // Append any nested members not in rootIds
+    for (const id of memberSet) {
+      if (!ordered.includes(id)) ordered.push(id);
+    }
+    return ordered;
+  }
+
+  /**
+   * Reorders rootIds so all tabs belonging to the same group are contiguous.
+   * Preserves first-occurrence order of groups and relative order within groups.
+   */
+  enforceGroupContiguity() {
+    // Build map: groupId -> [tabIds in rootIds order]
+    const groupBuckets = new Map();
+
+    for (const id of this.rootIds) {
+      const tab = this.tabs.get(id);
+      if (!tab) continue;
+      const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
+      if (!groupBuckets.has(gid)) groupBuckets.set(gid, []);
+      groupBuckets.get(gid).push(id);
+    }
+
+    // Rebuild rootIds preserving first-occurrence order of groups
+    const seenGroups = new Set();
+    const newRootIds = [];
+
+    for (const id of this.rootIds) {
+      const tab = this.tabs.get(id);
+      if (!tab) continue;
+      const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
+
+      if (!seenGroups.has(gid)) {
+        // First time seeing this group — add all its members
+        seenGroups.add(gid);
+        newRootIds.push(...groupBuckets.get(gid));
+      }
+      // Skip: already added via first occurrence
+    }
+
+    this.rootIds = newRootIds;
   }
 
   /**
@@ -593,7 +711,7 @@ export class ShadowState {
         pinned:     tab.pinned,
         audible:    tab.audible,
         status:     tab.status,
-        groupId:    tab.groupId ?? -1,
+        groupId:    tab.groupId ?? UNGROUPED_GROUP_ID,
         index:      tab.index,
         windowId:   tab.windowId,
       };
@@ -605,11 +723,19 @@ export class ShadowState {
       }
     }
 
-    // (c) Rebuild rootIds — tabs with parentId === null, ordered by index.
-    this.rootIds = [...this.tabs.values()]
-      .filter((n) => n.parentId === null)
-      .sort((a, b) => a.index - b.index)
-      .map((n) => n.tabId);
+    // (c) Rebuild rootIds — preserve existing order, append new roots at correct position.
+    const allRootSet = new Set(
+      [...this.tabs.values()].filter((n) => n.parentId === null).map((n) => n.tabId)
+    );
+    // Keep existing rootIds that are still roots (preserves drag-drop ordering)
+    const preserved = this.rootIds.filter((id) => allRootSet.has(id));
+    const preservedSet = new Set(preserved);
+    // Append any new roots not already in the list, sorted by index
+    const newRoots = [...allRootSet]
+      .filter((id) => !preservedSet.has(id))
+      .sort((a, b) => (this.tabs.get(a)?.index ?? 0) - (this.tabs.get(b)?.index ?? 0));
+    this.rootIds = [...preserved, ...newRoots];
+    this.enforceGroupContiguity(); // Ensure group members are contiguous
   }
 
   /**

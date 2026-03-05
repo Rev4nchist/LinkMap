@@ -167,3 +167,153 @@
   --search-bg: #0a0a0a;
   --search-border: #171717;
 }
+
+/* =========================================================================
+   Cyberpunk Suite — 5 themes from Conservative to Outlandish
+   ========================================================================= */
+
+/* Level 1: Arasaka Executive — Corporate, lethal, high-end */
+[data-theme="arasaka-executive"] {
+  --bg-primary: #000000;
+  --bg-secondary: #121212;
+  --bg-active: #1a1a1a;
+  --text-primary: #ffffff;
+  --text-secondary: #b0b0b0;
+  --text-muted: #666666;
+  --accent: #ffd700;
+
+  --border: #1a1a1a;
+  --scrollbar-thumb: #1a1a1a;
+  --scrollbar-track: #000000;
+  --close-hover: #8b0000;
+  --search-bg: #121212;
+  --search-border: #1a1a1a;
+}
+
+/* Level 2: Netrunner — Classic hacking terminal */
+[data-theme="netrunner"] {
+  --bg-primary: #02040a;
+  --bg-secondary: #0a1628;
+  --bg-active: #122040;
+  --text-primary: #b0bec5;
+  --text-secondary: #78909c;
+  --text-muted: #37474f;
+  --accent: #00f3ff;
+
+  --border: #0a1628;
+
+  --scrollbar-thumb: #122040;
+  --scrollbar-track: #02040a;
+  --close-hover: #ff3d3d;
+  --search-bg: #0a1628;
+  --search-border: #122040;
+}
+
+/* Netrunner glow effects */
+[data-theme="netrunner"] .tab-entry:hover {
+  box-shadow: inset 0 0 8px rgba(0, 243, 255, 0.08);
+}
+[data-theme="netrunner"] .tab-entry[data-active="true"] {
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 0 12px rgba(0, 243, 255, 0.1);
+}
+[data-theme="netrunner"] #search-input {
+  box-shadow: 0 0 4px rgba(0, 243, 255, 0.1);
+}
+
+/* Level 3: Synthwave Sunset — Miami 2077 */
+[data-theme="synthwave-sunset"] {
+  --bg-primary: #120024;
+  --bg-secondary: #1a0038;
+  --bg-active: #2a0050;
+  --text-primary: #ffffff;
+  --text-secondary: #e0b0ff;
+  --text-muted: #7b3f9e;
+  --accent: #ff00ff;
+
+  --border: #2a0050;
+  --scrollbar-thumb: #3a0068;
+  --scrollbar-track: #120024;
+  --close-hover: #ff4444;
+  --search-bg: #1a0038;
+  --search-border: #3a0068;
+}
+
+/* Synthwave gradient accents */
+[data-theme="synthwave-sunset"] .tab-entry[data-active="true"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: linear-gradient(90deg, rgba(255, 0, 255, 0.08), transparent);
+}
+
+/* Level 4: Toxic District — Industrial waste and bio-hazard */
+[data-theme="toxic-district"] {
+  --bg-primary: #0a0f0a;
+  --bg-secondary: #141f14;
+  --bg-active: #1e2e1e;
+  --text-primary: #d0ffd0;
+  --text-secondary: #80c080;
+  --text-muted: #3a5a3a;
+  --accent: #39ff14;
+
+  --border: #1a2a1a;
+  --scrollbar-thumb: #1e2e1e;
+  --scrollbar-track: #0a0f0a;
+  --close-hover: #ff3333;
+  --search-bg: #141f14;
+  --search-border: #1e2e1e;
+}
+
+/* Toxic District high-agitation accents */
+[data-theme="toxic-district"] .tab-entry[data-active="true"] {
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 6px rgba(57, 255, 20, 0.15);
+}
+[data-theme="toxic-district"] #search-input:focus {
+  box-shadow: 0 0 6px rgba(57, 255, 20, 0.25);
+}
+
+/* Level 5: Cyberpsychosis — System failure and sensory overload */
+[data-theme="cyberpsychosis"] {
+  --bg-primary: #000000;
+  --bg-secondary: #080808;
+  --bg-active: #111111;
+  --text-primary: #ffffff;
+  --text-secondary: #e0e0e0;
+  --text-muted: #555555;
+  --accent: #ff00ff;
+
+  --border: #222222;
+  --scrollbar-thumb: #1a1a1a;
+  --scrollbar-track: #000000;
+  --close-hover: #ff0040;
+  --search-bg: #080808;
+  --search-border: #222222;
+}
+
+/* Cyberpsychosis clashing borders */
+[data-theme="cyberpsychosis"] .tab-entry {
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid #00ffff;
+}
+[data-theme="cyberpsychosis"] .tab-entry[data-active="true"] {
+  box-shadow: inset 3px 0 0 var(--accent), inset -3px 0 0 #00ffff;
+  background: #111111;
+}
+[data-theme="cyberpsychosis"] .tab-entry:hover {
+  animation: glitch 0.3s ease-in-out;
+}
+[data-theme="cyberpsychosis"] .tab-title {
+  font-weight: 700;
+}
+[data-theme="cyberpsychosis"] #search-input {
+  border-color: var(--accent);
+  box-shadow: 0 0 4px rgba(255, 0, 255, 0.2), 0 0 4px rgba(0, 255, 255, 0.2);
+}
+
+/* Glitch animation */
+@keyframes glitch {
+  0%   { transform: translate(0, 0); }
+  20%  { transform: translate(-2px, 1px); }
+  40%  { transform: translate(2px, -1px); }
+  60%  { transform: translate(-1px, -1px); }
+  80%  { transform: translate(1px, 1px); }
+  100% { transform: translate(0, 0); }
+}

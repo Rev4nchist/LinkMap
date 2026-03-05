@@ -5,11 +5,15 @@
  * DOM building is delegated to tree-renderer.js.
  */
 
-import { MSG } from '../shared/constants.js';
+import { MSG, THEME_ACCENTS, UNGROUPED_GROUP_ID } from '../shared/constants.js';
+import { escapeHtml, generateThemePalette } from '../shared/utils.js';
 import { renderTree } from './modules/tree-renderer.js';
-import { showContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
+import { showContextMenu, showGroupContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
 import { initSearch } from './modules/search.js';
-import { initDragDrop } from './modules/drag-drop.js';
+import { initDragDrop, initPinnedDragDrop } from './modules/drag-drop.js';
+import { undoCloseTab, toggleSessionManager, toggleRecentlyClosed, closeSessionManager, closeRecentlyClosed, setSessionState } from './modules/session-manager.js';
+import { toggleCommandPalette, setCommandPaletteState, closeCommandPalette } from './modules/command-palette.js';
+import { initWorkspaceUI, setWorkspaceState, getActiveWorkspaceTabIds } from './modules/workspace-ui.js';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -20,10 +24,16 @@ const pinnedSection = document.getElementById('pinned-tabs');
 const pinnedList = document.getElementById('pinned-list');
 const tabCountNum = document.getElementById('tab-count-num');
 const searchInput = document.getElementById('search-input');
+const searchClear = document.getElementById('search-clear');
 const themeSelect = document.getElementById('theme-select');
+const undoCloseBtn = document.getElementById('undo-close-btn');
+const sessionsBtn = document.getElementById('sessions-btn');
+const recentlyClosedBtn = document.getElementById('recently-closed-btn');
 const collapseAllBtn = document.getElementById('collapse-all-btn');
 const expandAllBtn = document.getElementById('expand-all-btn');
 const focusModeBtn = document.getElementById('focus-mode-btn');
+const workspaceBar = document.getElementById('workspace-bar');
+const addNewTabBtn = document.getElementById('add-new-tab-btn');
 
 // ---------------------------------------------------------------------------
 // Current state
@@ -32,12 +42,25 @@ const focusModeBtn = document.getElementById('focus-mode-btn');
 let currentState = null;
 let currentActiveTabId = null;
 let focusedTabId = null;
+let homeWindowId = null;
+let collapsedWindowIds = new Set();
+let selectedTabIds = new Set();
+
+// Query the side panel's own window once at init (stable, never changes)
+chrome.windows.getCurrent().then(win => { homeWindowId = win.id; });
 
 // ---------------------------------------------------------------------------
 // Drag & Drop
 // ---------------------------------------------------------------------------
 
 initDragDrop(treeContainer);
+initPinnedDragDrop(pinnedList);
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
+
+initWorkspaceUI(workspaceBar, () => render());
 
 // ---------------------------------------------------------------------------
 // Search
@@ -49,6 +72,22 @@ const search = initSearch(
   () => currentState,
   () => render()
 );
+
+// Show/hide clear button based on search input content
+searchInput.addEventListener('input', () => {
+  searchClear.hidden = !searchInput.value;
+});
+
+searchClear.addEventListener('click', () => {
+  search.clear();
+  searchClear.hidden = true;
+  searchInput.focus();
+});
+
+// Hide clear button when Escape clears the input (search.js sets value = '' directly)
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') searchClear.hidden = true;
+});
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -81,6 +120,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       document.documentElement.dataset.theme = message.payload.theme;
       if (themeSelect) themeSelect.value = message.payload.theme;
       break;
+    case 'CRASH_RECOVERY':
+      showCrashRecoveryBanner(message.payload);
+      break;
+    case 'FOCUS_SEARCH':
+      searchInput.focus();
+      searchInput.select();
+      break;
   }
 });
 
@@ -94,6 +140,9 @@ function handleStateUpdate(payload) {
   currentState = payload;
   currentActiveTabId = payload.activeTabId ?? currentActiveTabId;
   setContextMenuState(currentState);
+  setSessionState(currentState);
+  setCommandPaletteState(currentState);
+  setWorkspaceState(currentState);
 
   // Apply theme
   if (payload.theme) {
@@ -105,11 +154,30 @@ function handleStateUpdate(payload) {
 }
 
 let renderRafId = null;
+let pendingScrollTabId = null;
+
+/**
+ * Filters state to only include tabs in the active workspace.
+ * @param {Object} state - Full state payload
+ * @param {Set<number>} wsTabIds - Tab IDs in the active workspace
+ * @returns {Object} Filtered state with same shape
+ */
+function filterStateByWorkspace(state, wsTabIds) {
+  const filteredTabs = {};
+  for (const [id, tab] of Object.entries(state.tabs)) {
+    if (wsTabIds.has(Number(id))) {
+      filteredTabs[id] = tab;
+    }
+  }
+  const filteredRootIds = state.rootIds.filter(id => wsTabIds.has(id));
+  return {
+    ...state,
+    tabs: filteredTabs,
+    rootIds: filteredRootIds,
+  };
+}
 
 function render() {
-  if (!currentState) return;
-  if (search.isActive()) return; // don't overwrite search results
-
   // Coalesce rapid re-renders via rAF
   if (renderRafId) cancelAnimationFrame(renderRafId);
   renderRafId = requestAnimationFrame(renderNow);
@@ -120,18 +188,32 @@ function renderNow() {
   if (!currentState) return;
   if (search.isActive()) return;
 
-  renderTree(currentState, currentActiveTabId, treeContainer, pinnedList);
+  // Workspace filtering: if a workspace is active, build a filtered state
+  const wsTabIds = getActiveWorkspaceTabIds();
+  const stateToRender = wsTabIds ? filterStateByWorkspace(currentState, wsTabIds) : currentState;
+
+  renderTree(stateToRender, currentActiveTabId, treeContainer, pinnedList, homeWindowId, collapsedWindowIds);
 
   // Update pinned section visibility
   const hasPinned = pinnedList.children.length > 0;
   pinnedSection.hidden = !hasPinned;
 
-  // Update tab count
-  const tabCount = Object.keys(currentState.tabs).length;
+  // Update tab count (reflect workspace filter)
+  const tabCount = Object.keys(stateToRender.tabs).length;
   tabCountNum.textContent = tabCount;
 
   // Re-apply keyboard focus ring after re-render
   updateFocusRing();
+
+  // Post-render scroll (replaces setTimeout-based scrollToActiveTab)
+  if (pendingScrollTabId != null) {
+    const scrollId = pendingScrollTabId;
+    pendingScrollTabId = null;
+    const el = treeContainer.querySelector(`[data-tab-id="${scrollId}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,13 +239,9 @@ function scrollToActiveTab(tabId) {
     parentId = parent?.parentId ?? null;
   }
 
-  // Scroll after state updates propagate
-  setTimeout(() => {
-    const el = treeContainer.querySelector(`[data-tab-id="${tabId}"]`);
-    if (el) {
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, 100);
+  // Schedule scroll for after next render cycle
+  pendingScrollTabId = tabId;
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -172,18 +250,29 @@ function scrollToActiveTab(tabId) {
 
 // Click handling (event delegation)
 treeContainer.addEventListener('click', (e) => {
-  // Group header click — optimistic toggle + Chrome API sync
+  // Window separator click — toggle collapse for non-home windows
+  const windowSep = e.target.closest('.window-separator');
+  if (windowSep) {
+    const wid = Number(windowSep.dataset.windowId);
+    if (wid && wid !== homeWindowId) {
+      if (collapsedWindowIds.has(wid)) {
+        collapsedWindowIds.delete(wid);
+      } else {
+        collapsedWindowIds.add(wid);
+      }
+      render();
+    }
+    return;
+  }
+
+  // Group header click — route through background to avoid race conditions
   const groupHeader = e.target.closest('.group-header');
   if (groupHeader) {
     const groupId = Number(groupHeader.dataset.groupId);
-    const group = currentState?.groups?.[groupId];
-    if (group) {
-      // Optimistic: update local state immediately for instant UI
-      group.collapsed = !group.collapsed;
-      renderNow();
-      // Sync with Chrome (background will confirm via broadcast)
-      chrome.tabGroups.update(groupId, { collapsed: group.collapsed });
-    }
+    chrome.runtime.sendMessage({
+      type: MSG.TOGGLE_GROUP_COLLAPSE,
+      payload: { groupId },
+    }).catch(() => {});
     return;
   }
 
@@ -204,6 +293,41 @@ treeContainer.addEventListener('click', (e) => {
     return;
   }
 
+  // Ctrl+Click — multi-select
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    if (selectedTabIds.has(tabId)) {
+      selectedTabIds.delete(tabId);
+    } else {
+      selectedTabIds.add(tabId);
+    }
+    updateMultiSelectUI();
+    return;
+  }
+
+  // Shift+Click — range select
+  if (e.shiftKey && focusedTabId != null) {
+    e.preventDefault();
+    const visibleIds = getVisibleTabIds();
+    const startIdx = visibleIds.indexOf(focusedTabId);
+    const endIdx = visibleIds.indexOf(tabId);
+    if (startIdx !== -1 && endIdx !== -1) {
+      const from = Math.min(startIdx, endIdx);
+      const to = Math.max(startIdx, endIdx);
+      for (let i = from; i <= to; i++) {
+        selectedTabIds.add(visibleIds[i]);
+      }
+      updateMultiSelectUI();
+    }
+    return;
+  }
+
+  // Clear multi-select on regular click
+  if (selectedTabIds.size > 0) {
+    selectedTabIds.clear();
+    updateMultiSelectUI();
+  }
+
   // Tab clicked — activate it
   chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
 });
@@ -220,6 +344,12 @@ treeContainer.addEventListener('auxclick', (e) => {
 
 // Right-click context menu
 treeContainer.addEventListener('contextmenu', (e) => {
+  const groupHeader = e.target.closest('.group-header');
+  if (groupHeader) {
+    e.preventDefault();
+    showGroupContextMenu(Number(groupHeader.dataset.groupId), e.clientX, e.clientY);
+    return;
+  }
   const tabEntry = e.target.closest('.tab-entry');
   if (!tabEntry) return;
   e.preventDefault();
@@ -280,7 +410,40 @@ if (focusModeBtn) {
         type: MSG.FOCUS_MODE,
         payload: { tabId: currentActiveTabId },
       }).catch(() => {});
+      // Scroll to active tab after re-render from state update
+      setTimeout(() => {
+        const el = treeContainer.querySelector(`[data-tab-id="${currentActiveTabId}"]`);
+        if (el) {
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }, 150);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Session Management Buttons
+// ---------------------------------------------------------------------------
+
+if (undoCloseBtn) {
+  undoCloseBtn.addEventListener('click', () => undoCloseTab());
+}
+
+if (sessionsBtn) {
+  sessionsBtn.addEventListener('click', () => toggleSessionManager(treeContainer));
+}
+
+if (recentlyClosedBtn) {
+  recentlyClosedBtn.addEventListener('click', () => {
+    const footer = document.getElementById('footer');
+    toggleRecentlyClosed(footer);
+  });
+}
+
+// Add New Tab button
+if (addNewTabBtn) {
+  addNewTabBtn.addEventListener('click', () => {
+    chrome.tabs.create({});
   });
 }
 
@@ -475,7 +638,7 @@ function showSettings() {
   // Collect unique non-default groupIds from current tabs
   const groups = new Set();
   for (const tab of Object.values(currentState.tabs)) {
-    if (tab.groupId !== undefined && tab.groupId !== -1) {
+    if (tab.groupId !== undefined && tab.groupId !== UNGROUPED_GROUP_ID) {
       groups.add(tab.groupId);
     }
   }
@@ -491,13 +654,23 @@ function showSettings() {
     return;
   }
 
+  const themePalette = generateThemePalette(currentState.theme, THEME_ACCENTS);
+
   let html = '<div class="settings-section"><div class="settings-label">Group Colors</div>';
   for (const groupId of groups) {
+    const groupData = currentState.groups?.[groupId];
+    const groupName = groupData?.title || 'Untitled Group';
     const currentColor = currentState.groupColors?.[groupId] || '#6c8cff';
+    const swatchesHtml = themePalette.map(hex =>
+      `<span class="settings-swatch" data-group-id="${groupId}" data-color="${hex}" style="background:${hex}" title="${hex}"></span>`
+    ).join('');
     html += `
-      <div class="group-color-row">
-        <span class="group-id-label">Group ${groupId}</span>
-        <input type="color" class="group-color-input" data-group-id="${groupId}" value="${currentColor}">
+      <div class="group-color-section">
+        <div class="group-color-row">
+          <span class="group-id-label">${escapeHtml(groupName)}</span>
+          <input type="color" class="group-color-input" data-group-id="${groupId}" value="${currentColor}">
+        </div>
+        <div class="settings-swatch-row">${swatchesHtml}</div>
       </div>
     `;
   }
@@ -511,6 +684,17 @@ function showSettings() {
     chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } }).catch(() => {});
   });
 
+  panel.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.settings-swatch');
+    if (!swatch) return;
+    const groupId = Number(swatch.dataset.groupId);
+    const color = swatch.dataset.color;
+    // Update the hex input to match
+    const input = panel.querySelector(`.group-color-input[data-group-id="${groupId}"]`);
+    if (input) input.value = color;
+    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } }).catch(() => {});
+  });
+
   treeContainer.before(panel);
 }
 
@@ -518,5 +702,129 @@ function hideSettings() {
   const panel = document.getElementById('settings-panel');
   if (panel) panel.remove();
 }
+
+// ---------------------------------------------------------------------------
+// Multi-Select UI
+// ---------------------------------------------------------------------------
+
+function updateMultiSelectUI() {
+  // Update data-selected attributes on tab entries
+  treeContainer.querySelectorAll('.tab-entry[data-tab-id]').forEach(el => {
+    const tabId = Number(el.dataset.tabId);
+    el.dataset.selected = String(selectedTabIds.has(tabId));
+  });
+
+  // Show/hide multi-select toolbar
+  let toolbar = document.getElementById('multi-select-toolbar');
+  if (selectedTabIds.size > 0) {
+    if (!toolbar) {
+      toolbar = document.createElement('div');
+      toolbar.id = 'multi-select-toolbar';
+      toolbar.className = 'multi-select-toolbar';
+      treeContainer.before(toolbar);
+    }
+    toolbar.innerHTML = `
+      <span class="ms-count">${selectedTabIds.size} selected</span>
+      <button data-action="close">Close</button>
+      <button data-action="group">Group</button>
+      <button data-action="sleep">Sleep</button>
+      <button data-action="copy">Copy URLs</button>
+      <button class="ms-clear" data-action="clear">&times;</button>
+    `;
+    toolbar.onclick = (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const ids = [...selectedTabIds];
+      switch (action) {
+        case 'close':
+          chrome.runtime.sendMessage({ type: MSG.MULTI_CLOSE, payload: { tabIds: ids } }).catch(() => {});
+          break;
+        case 'group':
+          chrome.runtime.sendMessage({ type: MSG.MULTI_GROUP, payload: { tabIds: ids } }).catch(() => {});
+          break;
+        case 'sleep':
+          chrome.runtime.sendMessage({ type: MSG.MULTI_SLEEP, payload: { tabIds: ids } }).catch(() => {});
+          break;
+        case 'copy': {
+          const urls = ids
+            .map(id => currentState?.tabs?.[id]?.url)
+            .filter(Boolean)
+            .join('\n');
+          navigator.clipboard.writeText(urls).catch(() => {});
+          break;
+        }
+        case 'clear':
+          break; // handled below
+      }
+      selectedTabIds.clear();
+      updateMultiSelectUI();
+    };
+  } else if (toolbar) {
+    toolbar.remove();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Crash Recovery Banner
+// ---------------------------------------------------------------------------
+
+function showCrashRecoveryBanner({ savedTabCount, liveTabCount }) {
+  // Check if there's an auto-save to restore
+  chrome.runtime.sendMessage({ type: MSG.GET_SESSIONS }, (response) => {
+    if (chrome.runtime.lastError) return;
+    const sessions = response?.sessions || [];
+    const latestAutoSave = sessions
+      .filter(s => s.isAutoSave)
+      .sort((a, b) => b.savedAt - a.savedAt)[0];
+
+    if (!latestAutoSave) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'crash-recovery-banner';
+    banner.innerHTML = `
+      <span class="cr-text"><strong>${savedTabCount - liveTabCount} tabs lost.</strong> Restore from auto-save? (${latestAutoSave.tabCount} tabs)</span>
+      <div style="display:flex;gap:4px">
+        <button class="cr-restore-btn">Restore</button>
+        <button class="cr-dismiss-btn">Dismiss</button>
+      </div>
+    `;
+
+    banner.querySelector('.cr-restore-btn').addEventListener('click', () => {
+      chrome.runtime.sendMessage({
+        type: MSG.RESTORE_SESSION,
+        payload: { sessionId: latestAutoSave.id },
+      }).catch(() => {});
+      banner.remove();
+    });
+
+    banner.querySelector('.cr-dismiss-btn').addEventListener('click', () => {
+      banner.remove();
+    });
+
+    const app = document.getElementById('app');
+    app.insertBefore(banner, app.firstChild.nextSibling); // after header
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Ctrl+Z — Undo Close Tab, Ctrl+K — Command Palette
+// ---------------------------------------------------------------------------
+
+document.addEventListener('keydown', (e) => {
+  // Ctrl+K — Command Palette
+  if (e.ctrlKey && e.key === 'k' && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    toggleCommandPalette();
+    return;
+  }
+
+  // Ctrl+Z — Undo Close Tab
+  if (e.ctrlKey && e.key === 'z' && !e.shiftKey && !e.altKey) {
+    if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+    undoCloseTab();
+  }
+});
 
 console.log('[LinkMap] Side panel loaded');

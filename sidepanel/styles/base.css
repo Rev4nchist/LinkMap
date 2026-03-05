@@ -64,8 +64,10 @@ footer {
   background: var(--text-muted);
 }
 
-/* Settings button */
-#settings-btn {
+/* Shared icon button base */
+.icon-button,
+#settings-btn,
+.toolbar-buttons button {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -77,7 +79,9 @@ footer {
   justify-content: center;
 }
 
-#settings-btn:hover {
+.icon-button:hover,
+#settings-btn:hover,
+.toolbar-buttons button:hover {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
@@ -98,12 +102,34 @@ footer {
   color: var(--text-muted);
 }
 
-/* Section labels */
-.section-label {
-  font-size: 10px;
+/* Add New Tab button in footer */
+.add-new-tab-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.add-new-tab-btn:hover {
+  color: var(--accent);
+  background: var(--bg-secondary);
+}
+
+/* Shared label base — uppercase, muted, spaced */
+.label-caps,
+.section-label,
+.settings-label {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
+}
+
+/* Section labels */
+.section-label {
+  font-size: 10px;
   padding: 6px 12px 4px;
 }
 
@@ -121,9 +147,6 @@ footer {
 
 .settings-label {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
@@ -154,6 +177,31 @@ footer {
   padding: 0;
 }
 
+.group-color-section {
+  margin-bottom: 8px;
+}
+
+.settings-swatch-row {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 0;
+  flex-wrap: wrap;
+}
+
+.settings-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.settings-swatch:hover {
+  transform: scale(1.25);
+  border-color: var(--text-primary);
+}
+
 /* Toolbar buttons (Feature 1) */
 .toolbar-buttons {
   display: flex;
@@ -161,19 +209,4 @@ footer {
   flex-shrink: 0;
 }
 
-.toolbar-buttons button {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.toolbar-buttons button:hover {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
+/* (styles consolidated into .icon-button base above) */

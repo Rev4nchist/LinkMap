@@ -7,7 +7,12 @@
     "tabs",
     "sidePanel",
     "storage",
-    "tabGroups"
+    "tabGroups",
+    "sessions",
+    "alarms",
+    "unlimitedStorage",
+    "history",
+    "bookmarks"
   ],
   "background": {
     "service_worker": "background.js",
@@ -27,7 +32,34 @@
   },
   "icons": {
     "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E"
+      },
+      "description": "Toggle LinkMap side panel"
+    },
+    "focus-search": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F"
+      },
+      "description": "Focus search in LinkMap"
+    },
+    "close-current-tab": {
+      "suggested_key": {
+        "default": "Alt+W"
+      },
+      "description": "Close the current tab"
+    },
+    "undo-close-tab": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Z"
+      },
+      "description": "Undo close tab"
+    }
   }
 }

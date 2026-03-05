@@ -1,0 +1,91 @@
+/* Workspace switcher bar */
+#workspace-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#workspace-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Workspace pill */
+.ws-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.ws-pill:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.ws-pill-active {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Color dot on workspace pill */
+.ws-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Tab count badge inside pill */
+.ws-pill-count {
+  font-size: 9px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  padding: 0 4px;
+  border-radius: 6px;
+  line-height: 14px;
+}
+
+.ws-pill-active .ws-pill-count {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/* Add workspace button */
+.ws-add-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.ws-add-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}

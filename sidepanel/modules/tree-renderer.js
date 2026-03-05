@@ -6,14 +6,16 @@
  */
 
 import { el } from '../../shared/utils.js';
-import { CHROME_GROUP_COLORS } from '../../shared/constants.js';
+import { CHROME_GROUP_COLORS, UNGROUPED_GROUP_ID, DEFAULT_FAVICON } from '../../shared/constants.js';
 
-/** Default favicon for tabs with missing or empty favIconUrl. */
-export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
-  '<circle cx="8" cy="8" r="6" fill="#666"/>' +
-  '</svg>'
-);
+// Re-export for consumers that import from here
+export { DEFAULT_FAVICON };
+
+/** Maximum nesting depth to prevent stack overflow on circular structures. */
+const MAX_TREE_DEPTH = 50;
+
+/** Per-render cache for countDescendants — reset at the top of renderTree. */
+let _descendantCache = null;
 
 /**
  * Renders the full tab tree into the provided containers.
@@ -22,57 +24,137 @@ export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
  * @param {number|null} activeTabId - Currently active tab ID
  * @param {HTMLElement} container - The #tree-container element
  * @param {HTMLElement} pinnedContainer - The #pinned-list element
+ * @param {number|null} homeWindowId - The side panel's own window ID (stable)
+ * @param {Set<number>} collapsedWindowIds - Set of collapsed window IDs
  */
-export function renderTree(state, activeTabId, container, pinnedContainer) {
-  const { tabs, rootIds, collapsed, groupColors, groups } = state;
+export function renderTree(state, activeTabId, container, pinnedContainer, homeWindowId, collapsedWindowIds) {
+  _descendantCache = new Map();
+  const { tabs, rootIds, collapsed, groupColors, groups, duplicates, visitFrequency, tabNotes } = state;
+  const duplicateTabIds = new Set();
+  if (duplicates) {
+    for (const ids of Object.values(duplicates)) {
+      for (const id of ids) duplicateTabIds.add(id);
+    }
+  }
   const collapsedSet = new Set(collapsed);
   const groupsMap = groups || {};
+
+  // Pre-compute group colors (avoids repeated lookups per tab)
+  const groupColorCache = new Map();
+  for (const gid of Object.keys(groupsMap)) {
+    const id = Number(gid);
+    groupColorCache.set(id, resolveGroupColor(id, groupsMap[id], groupColors));
+  }
 
   // Separate pinned from non-pinned tabs
   const pinnedElements = [];
   const treeElements = [];
-  let lastGroupId = null;
+
+  // Partition rootIds by windowId
+  const windowBuckets = new Map(); // windowId -> [rootId, ...]
+  const pinnedRootIds = [];
 
   for (const rootId of rootIds) {
     const tab = tabs[rootId];
     if (!tab) continue;
-
     if (tab.pinned) {
-      pinnedElements.push(buildPinnedTab(tab));
-      // Pinned tab's non-pinned children still render in the tree
-      if (tab.children && tab.children.length > 0) {
-        for (const childId of tab.children) {
-          const child = tabs[childId];
-          if (!child || child.pinned) continue;
-          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap);
-        }
-      }
+      pinnedRootIds.push(rootId);
       continue;
     }
-
-    const groupId = tab.groupId ?? -1;
-
-    // Insert group header when entering a new group cluster
-    if (groupId !== -1 && groupId !== lastGroupId) {
-      const group = groupsMap[groupId];
-      const memberCount = countGroupMembers(rootIds, tabs, groupId);
-      const resolvedColor = resolveGroupColor(groupId, group, groupColors);
-      treeElements.push(buildGroupHeader(groupId, group, resolvedColor, memberCount));
-    }
-    lastGroupId = groupId;
-
-    // Skip tabs in collapsed Chrome groups (group header remains visible)
-    if (groupId !== -1) {
-      const group = groupsMap[groupId];
-      if (group && group.collapsed) continue;
-    }
-
-    renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap);
+    const wid = tab.windowId ?? 0;
+    if (!windowBuckets.has(wid)) windowBuckets.set(wid, []);
+    windowBuckets.get(wid).push(rootId);
   }
 
-  // Swap DOM content
+  // Render pinned tabs
+  for (const rootId of pinnedRootIds) {
+    const tab = tabs[rootId];
+    pinnedElements.push(buildPinnedTab(tab));
+    // Pinned tab's non-pinned children still render in the tree
+    if (tab.children && tab.children.length > 0) {
+      for (const childId of tab.children) {
+        const child = tabs[childId];
+        if (!child || child.pinned) continue;
+        renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+      }
+    }
+  }
+
+  // Sort windows: home window first (stable), then by windowId
+  const sortedWindowIds = [...windowBuckets.keys()].sort((a, b) => {
+    if (a === homeWindowId) return -1;
+    if (b === homeWindowId) return 1;
+    return a - b;
+  });
+
+  // Stable labels: assign by ascending windowId order (independent of sort)
+  const allWindowIds = [...windowBuckets.keys()].sort((a, b) => a - b);
+  const windowLabels = new Map();
+  allWindowIds.forEach((wid, i) => windowLabels.set(wid, `Window ${i + 1}`));
+
+  // Render each window's tabs with separator headers
+  for (const wid of sortedWindowIds) {
+    const windowRootIds = windowBuckets.get(wid);
+
+    // Insert window separator (skip for single window)
+    if (sortedWindowIds.length > 1) {
+      const isHome = wid === homeWindowId;
+      const label = isHome ? 'This Window' : windowLabels.get(wid);
+      const isCollapsible = !isHome;
+      const isCollapsed = collapsedWindowIds && collapsedWindowIds.has(wid);
+      treeElements.push(buildWindowSeparator(label, isCollapsible, isCollapsed, wid));
+
+      // Skip tabs for collapsed non-home windows
+      if (isCollapsed) continue;
+    }
+
+    // Pre-compute group member counts for this window
+    const windowGroupCounts = new Map();
+    for (const rootId of windowRootIds) {
+      const tab = tabs[rootId];
+      if (!tab) continue;
+      const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
+      if (gid !== UNGROUPED_GROUP_ID) {
+        windowGroupCounts.set(gid, (windowGroupCounts.get(gid) || 0) + 1);
+      }
+    }
+
+    // Render tabs for this window
+    const emittedGroups = new Set();
+    let lastGroupId = null;
+    for (const rootId of windowRootIds) {
+      const tab = tabs[rootId];
+      if (!tab) continue;
+
+      const groupId = tab.groupId ?? UNGROUPED_GROUP_ID;
+
+      // Insert group header when entering a new group cluster (emit-once guard)
+      if (groupId !== UNGROUPED_GROUP_ID && !emittedGroups.has(groupId)) {
+        const group = groupsMap[groupId];
+        const memberCount = windowGroupCounts.get(groupId) || 0;
+        const resolvedColor = groupColorCache.get(groupId) || resolveGroupColor(groupId, group, groupColors);
+        treeElements.push(buildGroupHeader(groupId, group, resolvedColor, memberCount));
+        emittedGroups.add(groupId);
+      }
+      lastGroupId = groupId;
+
+      // Skip tabs in collapsed Chrome groups (group header remains visible)
+      if (groupId !== UNGROUPED_GROUP_ID) {
+        const group = groupsMap[groupId];
+        if (group && group.collapsed) continue;
+      }
+
+      renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+    }
+  }
+
+  // Swap DOM content — keyed reconciliation preserves scroll + DOM state
+  const scrollTop = container.scrollTop;
+
   pinnedContainer.replaceChildren(...pinnedElements);
-  container.replaceChildren(...treeElements);
+  reconcileChildren(container, treeElements);
+
+  container.scrollTop = scrollTop;
 }
 
 /**
@@ -87,8 +169,10 @@ export function renderTree(state, activeTabId, container, pinnedContainer) {
  * @param {Object} groupColors - Manual group color overrides
  * @param {Object} groupsMap - Chrome group data
  */
-function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap) {
-  elements.push(buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors, groupsMap));
+function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes) {
+  if (depth > MAX_TREE_DEPTH) return; // guard against infinite recursion
+
+  elements.push(buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes));
 
   const isCollapsed = collapsedSet.has(tab.tabId);
   if (!isCollapsed && tab.children && tab.children.length > 0) {
@@ -96,7 +180,7 @@ function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, gr
       const child = tabs[childId];
       if (!child) continue;
       if (child.pinned) continue; // pinned children go to pinned section
-      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap);
+      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
     }
   }
 }
@@ -113,10 +197,13 @@ function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, gr
  * @param {Object} groupsMap - Chrome group data
  * @returns {HTMLElement}
  */
-function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors, groupsMap) {
+function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes) {
   const hasChildren = tab.children && tab.children.length > 0;
   const isActive = tab.tabId === activeTabId;
   const isCollapsed = collapsedSet.has(tab.tabId);
+  const isDuplicate = duplicateTabIds && duplicateTabIds.has(tab.tabId);
+  const isDiscarded = tab.status === 'unloaded';
+  const freq = visitFrequency?.[tab.tabId];
 
   // Chevron or spacer
   const chevronOrSpacer = hasChildren
@@ -139,6 +226,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     height: '16',
     alt: '',
   });
+  favicon.onerror = () => { favicon.style.visibility = 'hidden'; };
 
   // Title
   const title = el('span', { className: 'tab-title' }, tab.title || tab.url || '');
@@ -161,25 +249,63 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     ? 'tab-entry tab-audible'
     : 'tab-entry';
 
+  // Duplicate indicator
+  let dupBadge = null;
+  if (isDuplicate) {
+    dupBadge = el('span', { className: 'tab-badge tab-duplicate-badge', title: 'Duplicate tab' }, 'dup');
+  }
+
+  // Discarded (sleeping) indicator
+  let sleepBadge = null;
+  if (isDiscarded) {
+    sleepBadge = el('span', { className: 'tab-badge tab-sleep-badge', title: 'Tab is sleeping (discarded)' }, 'zzz');
+  }
+
+  // Visit frequency indicator
+  let freqDot = null;
+  if (freq && freq.tier !== 'normal') {
+    freqDot = el('span', {
+      className: `tab-freq tab-freq-${freq.tier}`,
+      title: `${freq.count} visits`,
+    });
+  }
+
   // Build children array for el()
   const children = [chevronOrSpacer, favicon, title];
+  if (freqDot) children.push(freqDot);
+  if (sleepBadge) children.push(sleepBadge);
+  if (dupBadge) children.push(dupBadge);
   if (badge) children.push(badge);
   children.push(closeBtn);
 
+  // Add discarded/duplicate classes
+  let finalClasses = entryClasses;
+  if (isDiscarded) finalClasses += ' tab-discarded';
+  if (isDuplicate) finalClasses += ' tab-duplicate';
+
   const entry = el('div', {
-    className: entryClasses,
+    className: finalClasses,
     draggable: 'true',
     dataset: {
       tabId: String(tab.tabId),
       depth: String(depth),
       active: String(isActive),
+      groupId: String(tab.groupId ?? UNGROUPED_GROUP_ID),
+      windowId: String(tab.windowId ?? 0),
     },
   }, ...children);
 
+  // Tab note subtitle
+  const noteText = tabNotes?.[tab.tabId];
+  if (noteText) {
+    const noteEl = el('div', { className: 'tab-note' }, noteText);
+    entry.appendChild(noteEl);
+    entry.classList.add('tab-has-note');
+  }
+
   // Apply group color as left border accent
-  if (tab.groupId !== undefined && tab.groupId !== -1) {
-    const group = groupsMap?.[tab.groupId];
-    const groupColor = resolveGroupColor(tab.groupId, group, groupColors);
+  if (tab.groupId !== undefined && tab.groupId !== UNGROUPED_GROUP_ID) {
+    const groupColor = groupColorCache?.get(tab.groupId) || resolveGroupColor(tab.groupId, groupsMap?.[tab.groupId], groupColors);
     if (groupColor) {
       entry.style.borderLeft = `3px solid ${groupColor}`;
     }
@@ -206,6 +332,7 @@ function buildPinnedTab(tab) {
 
   return el('div', {
     className: 'pinned-tab',
+    draggable: 'true',
     dataset: { tabId: String(tab.tabId) },
     title: tab.title || tab.url || '',
   }, favicon);
@@ -242,6 +369,7 @@ function buildGroupHeader(groupId, group, resolvedColor, memberCount) {
 
   const header = el('div', {
     className: 'group-header',
+    draggable: 'true',
     dataset: { groupId: String(groupId) },
   }, chevron, swatch, title, count);
 
@@ -252,20 +380,176 @@ function buildGroupHeader(groupId, group, resolvedColor, memberCount) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Window Separator
 // ---------------------------------------------------------------------------
 
 /**
- * Counts root-level tabs belonging to a group.
+ * Builds a window separator element.
+ *
+ * @param {string} label - Display label (e.g., "This Window", "Window 2")
+ * @param {boolean} isCollapsible - Whether the separator can be collapsed
+ * @param {boolean} isCollapsed - Whether the section is currently collapsed
+ * @param {number} windowId - The window ID for click handling
+ * @returns {HTMLElement}
  */
-function countGroupMembers(rootIds, tabs, groupId) {
-  let count = 0;
-  for (const id of rootIds) {
-    const tab = tabs[id];
-    if (tab && tab.groupId === groupId) count++;
+function buildWindowSeparator(label, isCollapsible, isCollapsed, windowId) {
+  const children = [];
+
+  if (isCollapsible) {
+    children.push(el('span', {
+      className: 'window-chevron',
+      dataset: { collapsed: String(!!isCollapsed) },
+    }, '\u25B6'));
   }
-  return count;
+
+  children.push(label);
+
+  const classes = isCollapsible ? 'window-separator window-collapsible' : 'window-separator';
+  const dataset = windowId != null ? { windowId: String(windowId) } : {};
+
+  return el('div', { className: classes, dataset }, ...children);
 }
+
+// ---------------------------------------------------------------------------
+// Keyed DOM Reconciliation
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts a stable key from a DOM element for reconciliation.
+ * Returns null if the element has no identifiable key.
+ */
+export function getElementKey(el) {
+  if (el.dataset?.tabId) return `tab-${el.dataset.tabId}`;
+  if (el.dataset?.groupId) return `group-${el.dataset.groupId}`;
+  if (el.dataset?.windowId) return `window-${el.dataset.windowId}`;
+  return null;
+}
+
+/**
+ * Patches an existing DOM element to match an incoming element's state,
+ * avoiding full replacement. Only touches attributes that differ.
+ */
+export function patchElement(existing, incoming) {
+  // className
+  if (existing.className !== incoming.className) {
+    existing.className = incoming.className;
+  }
+
+  // dataset attributes
+  for (const key of Object.keys(incoming.dataset)) {
+    if (existing.dataset[key] !== incoming.dataset[key]) {
+      existing.dataset[key] = incoming.dataset[key];
+    }
+  }
+
+  // style.cssText (covers borderLeft, backgroundColor, etc.)
+  if (existing.style.cssText !== incoming.style.cssText) {
+    existing.style.cssText = incoming.style.cssText;
+  }
+
+  // Tab-specific patches
+  const existingTitle = existing.querySelector?.('.tab-title');
+  const incomingTitle = incoming.querySelector?.('.tab-title');
+  if (existingTitle && incomingTitle && existingTitle.textContent !== incomingTitle.textContent) {
+    existingTitle.textContent = incomingTitle.textContent;
+  }
+
+  const existingFav = existing.querySelector?.('.tab-favicon');
+  const incomingFav = incoming.querySelector?.('.tab-favicon');
+  if (existingFav && incomingFav && existingFav.src !== incomingFav.src) {
+    existingFav.src = incomingFav.src;
+    existingFav.setAttribute('src', incomingFav.src);
+  }
+
+  // Group-specific patches
+  const existingGroupTitle = existing.querySelector?.('.group-title');
+  const incomingGroupTitle = incoming.querySelector?.('.group-title');
+  if (existingGroupTitle && incomingGroupTitle && existingGroupTitle.textContent !== incomingGroupTitle.textContent) {
+    existingGroupTitle.textContent = incomingGroupTitle.textContent;
+  }
+
+  const existingCount = existing.querySelector?.('.group-count');
+  const incomingCount = incoming.querySelector?.('.group-count');
+  if (existingCount && incomingCount && existingCount.textContent !== incomingCount.textContent) {
+    existingCount.textContent = incomingCount.textContent;
+  }
+
+  // Chevron collapsed state (tab-chevron, group-chevron, window-chevron)
+  for (const cls of ['.tab-chevron', '.group-chevron', '.window-chevron']) {
+    const existingChevron = existing.querySelector?.(cls);
+    const incomingChevron = incoming.querySelector?.(cls);
+    if (existingChevron && incomingChevron && existingChevron.dataset.collapsed !== incomingChevron.dataset.collapsed) {
+      existingChevron.dataset.collapsed = incomingChevron.dataset.collapsed;
+    }
+  }
+}
+
+/**
+ * Keyed reconciliation: efficiently updates container's children to match
+ * newElements by reusing existing DOM nodes where keys match.
+ *
+ * Algorithm:
+ * 1. Build a map of existing children by key.
+ * 2. For each new element, reuse+patch if key exists, otherwise insert.
+ * 3. Remove any old children not in the new list.
+ * 4. Reorder to match the new element order.
+ */
+export function reconcileChildren(container, newElements) {
+  // Build key -> existing element map
+  const existingByKey = new Map();
+  for (const child of [...container.children]) {
+    const key = getElementKey(child);
+    if (key) existingByKey.set(key, child);
+  }
+
+  // Build the reconciled list
+  const reconciledChildren = [];
+  const usedKeys = new Set();
+
+  for (const incoming of newElements) {
+    const key = getElementKey(incoming);
+    if (key && existingByKey.has(key)) {
+      const existing = existingByKey.get(key);
+      patchElement(existing, incoming);
+      reconciledChildren.push(existing);
+      usedKeys.add(key);
+    } else {
+      reconciledChildren.push(incoming);
+    }
+  }
+
+  // Remove old children not in the new list
+  for (const [key, child] of existingByKey) {
+    if (!usedKeys.has(key)) {
+      child.remove();
+    }
+  }
+
+  // Reorder: walk through reconciled list and move/insert as needed
+  let cursor = container.children[0] || null;
+  for (let i = 0; i < reconciledChildren.length; i++) {
+    const target = reconciledChildren[i];
+    if (target === cursor) {
+      // Already in position
+      cursor = cursor.nextElementSibling;
+    } else if (target.parentNode === container) {
+      // Exists but wrong position — move it
+      container.insertBefore(target, cursor);
+    } else {
+      // New element — insert it
+      container.insertBefore(target, cursor);
+    }
+  }
+
+  // Remove any trailing children not in the reconciled list
+  while (container.children.length > reconciledChildren.length) {
+    container.children[reconciledChildren.length].remove();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Resolves the display color for a group.
@@ -283,6 +567,10 @@ function resolveGroupColor(groupId, group, groupColors) {
  * Counts all descendants of a tab recursively.
  */
 function countDescendants(tab, tabs) {
+  const tabId = tab.tabId ?? tab.id;
+  if (_descendantCache && _descendantCache.has(tabId)) {
+    return _descendantCache.get(tabId);
+  }
   let count = 0;
   const walk = (ids) => {
     for (const id of ids) {
@@ -294,5 +582,6 @@ function countDescendants(tab, tabs) {
     }
   };
   if (tab.children) walk(tab.children);
+  if (_descendantCache) _descendantCache.set(tabId, count);
   return count;
 }

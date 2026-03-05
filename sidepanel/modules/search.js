@@ -5,7 +5,7 @@
  * characters. Clearing or pressing Escape restores the normal tree view.
  */
 
-import { fuzzyMatch, el, debounce } from '../../shared/utils.js';
+import { smartSearch, el, debounce } from '../../shared/utils.js';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
 import { DEFAULT_FAVICON } from './tree-renderer.js';
 
@@ -49,7 +49,7 @@ export function initSearch(inputEl, treeContainer, getState, restoreTree) {
   function exitSearch() {
     if (!isSearching) return;
     isSearching = false;
-    treeContainer.className = '';
+    treeContainer.classList.remove('search-results');
     restoreTree();
   }
 
@@ -63,7 +63,8 @@ export function initSearch(inputEl, treeContainer, getState, restoreTree) {
 }
 
 /**
- * Search all tabs by title and URL using fuzzy matching.
+ * Search all tabs by title and URL using tiered smart search.
+ * URL matches are weighted lower than title matches to keep results relevant.
  * Returns sorted array of { tab, tabId, titleMatch, urlMatch, bestScore }.
  * @param {Object} tabs - map of tabId -> tab objects
  * @param {string} query - search query
@@ -73,8 +74,16 @@ export function searchTabs(tabs, query) {
   const results = [];
 
   for (const [tabId, tab] of Object.entries(tabs)) {
-    const titleResult = fuzzyMatch(query, tab.title || '');
-    const urlResult = fuzzyMatch(query, tab.url || '');
+    const titleResult = smartSearch(query, tab.title || '');
+    const urlResult = smartSearch(query, tab.url || '');
+
+    // URL results weighted lower; domain-level matches (prefix/word-boundary) stay higher
+    let adjustedUrlScore = urlResult.score * 0.6;
+    if (urlResult.tier === 'prefix' || urlResult.tier === 'word-boundary') {
+      adjustedUrlScore = urlResult.score * 0.8;
+    }
+
+    const bestScore = Math.max(titleResult.score, adjustedUrlScore);
 
     if (titleResult.match || urlResult.match) {
       results.push({
@@ -82,12 +91,17 @@ export function searchTabs(tabs, query) {
         tabId: Number(tabId),
         titleMatch: titleResult,
         urlMatch: urlResult,
-        bestScore: Math.max(titleResult.score, urlResult.score)
+        bestScore,
       });
     }
   }
 
-  results.sort((a, b) => b.bestScore - a.bestScore);
+  // Sort by score descending, then by title length ascending (shorter = more relevant)
+  results.sort((a, b) => {
+    if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
+    return (a.tab.title || '').length - (b.tab.title || '').length;
+  });
+
   return results;
 }
 

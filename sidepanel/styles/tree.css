@@ -3,6 +3,9 @@
   padding: 4px 0;
 }
 
+/* Indent depth 6+ (generated dynamically by renderer for deep nests) */
+.tab-entry[data-depth="6"] { padding-left: 108px; }
+
 /* Tab entry */
 .tab-entry {
   display: flex;
@@ -87,6 +90,7 @@
   border-radius: 2px;
   font-size: 10px;
   transition: transform 0.15s ease;
+  transform: rotate(90deg);
 }
 
 .tab-chevron:hover {
@@ -95,23 +99,7 @@
 }
 
 .tab-chevron[data-collapsed="true"] {
-  transform: rotate(-90deg);
-}
-
-/* Tree indentation */
-.tab-children {
-  position: relative;
-}
-
-/* Tree connector lines */
-.tab-children::before {
-  content: '';
-  position: absolute;
-  left: 20px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--border);
+  transform: rotate(0deg);
 }
 
 /* Indent per level */
@@ -163,6 +151,14 @@
   background: var(--bg-secondary);
 }
 
+.pinned-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.pinned-tab.dragging {
+  opacity: 0.4;
+}
+
 /* Drag and drop */
 .tab-entry[draggable="true"] {
   cursor: grab;
@@ -200,6 +196,34 @@
   right: -3px;
 }
 
+.pinned-drop-indicator {
+  position: fixed;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 100;
+  border-radius: 1px;
+}
+
+.pinned-drop-indicator::before,
+.pinned-drop-indicator::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  left: -2px;
+}
+
+.pinned-drop-indicator::before {
+  top: -3px;
+}
+
+.pinned-drop-indicator::after {
+  bottom: -3px;
+}
+
 .drop-target-child {
   background: var(--bg-active) !important;
   outline: 1px dashed var(--accent);
@@ -224,6 +248,114 @@
   line-height: 16px;
 }
 
+/* Duplicate tab badge */
+.tab-duplicate-badge {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.15);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.tab-duplicate .tab-title {
+  opacity: 0.7;
+}
+
+/* Sleeping (discarded) tab badge */
+.tab-sleep-badge {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-style: italic;
+}
+
+.tab-discarded .tab-favicon {
+  opacity: 0.4;
+}
+
+.tab-discarded .tab-title {
+  opacity: 0.5;
+}
+
+/* Tab notes */
+.tab-has-note {
+  flex-wrap: wrap;
+}
+
+.tab-note {
+  width: 100%;
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding-left: 38px;
+  padding-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+
+/* Multi-select */
+.tab-entry[data-selected="true"] {
+  background: var(--bg-hover);
+  outline: 1px solid var(--accent, #c084fc);
+  outline-offset: -1px;
+}
+
+.multi-select-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.multi-select-toolbar .ms-count {
+  color: var(--accent, #c084fc);
+  font-weight: 600;
+}
+
+.multi-select-toolbar button {
+  padding: 3px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.multi-select-toolbar button:hover {
+  background: var(--bg-hover);
+}
+
+.multi-select-toolbar .ms-clear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+}
+
+/* Visit frequency indicator */
+.tab-freq {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.tab-freq-warm {
+  background: #fbbf24;
+  opacity: 0.6;
+}
+
+.tab-freq-hot {
+  background: #f87171;
+  opacity: 0.8;
+}
+
 /* Group headers (Track 1) */
 .group-header {
   display: flex;
@@ -231,8 +363,12 @@
   padding: 4px 12px;
   gap: 6px;
   min-height: 28px;
-  cursor: pointer;
+  cursor: grab;
   user-select: none;
+}
+
+.group-header.dragging {
+  opacity: 0.4;
 }
 
 .group-header:hover {
@@ -268,8 +404,49 @@
   color: var(--text-muted);
   font-size: 10px;
   transition: transform 0.15s ease;
+  transform: rotate(90deg);
 }
 
 .group-chevron[data-collapsed="true"] {
-  transform: rotate(-90deg);
+  transform: rotate(0deg);
+}
+
+/* Window separator headers */
+.window-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.window-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Collapsible window separators */
+.window-collapsible {
+  cursor: pointer;
+}
+.window-collapsible:hover {
+  color: var(--text-secondary);
+}
+.window-chevron {
+  font-size: 8px;
+  transition: transform 0.15s ease;
+  transform: rotate(90deg);
+}
+.window-chevron[data-collapsed="true"] {
+  transform: rotate(0deg);
+}
+
+/* Drop target highlight on window separator */
+.window-separator.drop-target-child {
+  color: var(--accent);
+  background: var(--bg-active);
 }

@@ -38,8 +38,16 @@ class MockElement {
     return this.attributes[key] ?? null;
   }
 
+  get nextElementSibling() {
+    if (!this.parentNode) return null;
+    const siblings = this.parentNode.children;
+    const idx = siblings.indexOf(this);
+    return idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+  }
+
   appendChild(child) {
     if (child) {
+      if (child.parentNode) child.parentNode._removeChild(child);
       this.children.push(child);
       this.childNodes.push(child);
       child.parentNode = this;
@@ -47,7 +55,32 @@ class MockElement {
     return child;
   }
 
+  insertBefore(newNode, referenceNode) {
+    if (!referenceNode) return this.appendChild(newNode);
+    if (newNode.parentNode) newNode.parentNode._removeChild(newNode);
+    const idx = this.children.indexOf(referenceNode);
+    if (idx === -1) return this.appendChild(newNode);
+    this.children.splice(idx, 0, newNode);
+    this.childNodes.splice(idx, 0, newNode);
+    newNode.parentNode = this;
+    return newNode;
+  }
+
+  _removeChild(child) {
+    const idx = this.children.indexOf(child);
+    if (idx !== -1) {
+      this.children.splice(idx, 1);
+      this.childNodes.splice(idx, 1);
+      child.parentNode = null;
+    }
+  }
+
+  remove() {
+    if (this.parentNode) this.parentNode._removeChild(this);
+  }
+
   replaceChildren(...newChildren) {
+    for (const child of [...this.children]) child.parentNode = null;
     this.children = [];
     this.childNodes = [];
     for (const child of newChildren) {

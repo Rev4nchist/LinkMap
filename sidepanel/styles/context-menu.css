@@ -32,3 +32,76 @@
 .context-menu-item.danger {
   color: var(--close-hover);
 }
+
+/* --- Group context menu: rename input --- */
+
+.context-menu-rename {
+  padding: 6px 8px;
+}
+
+.context-menu-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.context-menu-rename-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* --- Group context menu: color palette --- */
+
+.context-menu-label {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.context-menu-color-picker {
+  padding: 2px 0;
+}
+
+.context-menu-color-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px 6px;
+  flex-wrap: wrap;
+}
+
+.context-menu-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.context-menu-color-swatch:hover {
+  transform: scale(1.2);
+}
+
+.context-menu-color-swatch.active {
+  border-color: var(--text-primary);
+}
+
+.context-menu-color-swatch.recommended {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.context-menu-color-row.theme-palette-row {
+  padding-top: 2px;
+}
+
+.context-menu-color-swatch.theme-swatch {
+  width: 16px;
+  height: 16px;
+}

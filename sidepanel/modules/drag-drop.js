@@ -1,19 +1,22 @@
 /**
- * drag-drop.js -- Drag and drop for tab reordering and reparenting.
+ * drag-drop.js -- Drag and drop for tab reordering/reparenting and group reordering.
  *
  * Uses the native HTML5 Drag and Drop API.
- * Supports three drop modes:
+ * Tab drops support three modes:
  *   - "before": insert before the target (top 25% of element)
  *   - "after":  insert after the target (bottom 25% of element)
  *   - "child":  reparent as child of the target (middle 50%)
+ * Group drops support only before/after (top/bottom half).
  */
 
-import { MSG } from '../../shared/constants.js';
+import { MSG, UNGROUPED_GROUP_ID } from '../../shared/constants.js';
 
 let draggedTabId = null;
+let draggedGroupId = null;
 let dropIndicator = null;
 let dropTarget = null;
 let dropMode = null; // 'before' | 'after' | 'child'
+let _dragOverRafId = null; // rAF throttle for dragover
 
 /**
  * Initialize drag and drop on the tree container.
@@ -39,6 +42,18 @@ export function initDragDrop(container) {
 // ---------------------------------------------------------------------------
 
 function onDragStart(e) {
+  // Group header drag
+  const groupHeader = e.target.closest('.group-header');
+  if (groupHeader) {
+    draggedGroupId = Number(groupHeader.dataset.groupId);
+    groupHeader.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', `group:${draggedGroupId}`);
+    requestAnimationFrame(() => { groupHeader.style.opacity = '0.4'; });
+    return;
+  }
+
+  // Tab entry drag
   const tabEntry = e.target.closest('.tab-entry');
   if (!tabEntry) return;
 
@@ -59,38 +74,127 @@ function onDragOver(e) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
 
-  const tabEntry = e.target.closest('.tab-entry');
-  if (!tabEntry) {
+  // Throttle DOM work to one rAF per frame
+  if (_dragOverRafId) return;
+  const clientY = e.clientY;
+  const eventTarget = e.target;
+  _dragOverRafId = requestAnimationFrame(() => {
+    _dragOverRafId = null;
+    _processDragOver(eventTarget, clientY);
+  });
+}
+
+function _processDragOver(eventTarget, clientY) {
+  // Find the nearest valid drop target
+  const target = eventTarget.closest('.tab-entry') || eventTarget.closest('.group-header') || eventTarget.closest('.window-separator');
+  if (!target) {
     clearDropTarget();
     return;
   }
 
-  const targetTabId = Number(tabEntry.dataset.tabId);
-  if (targetTabId === draggedTabId) {
-    clearDropTarget();
+  // Window separator: only valid for tab drags (move tab to that window)
+  if (target.classList.contains('window-separator')) {
+    if (draggedTabId === null) { clearDropTarget(); return; }
+    const rect = target.getBoundingClientRect();
+    setDropMode(target, 'child', rect);
+    dropTarget = target;
     return;
   }
 
-  const rect = tabEntry.getBoundingClientRect();
-  const y = e.clientY - rect.top;
-  const mode = resolveDropMode(y, rect);
+  // --- Self-drop guards ---
+  if (draggedGroupId !== null) {
+    const gh = target.closest('.group-header');
+    if (gh && Number(gh.dataset.groupId) === draggedGroupId) {
+      clearDropTarget();
+      return;
+    }
+    const te = target.closest('.tab-entry');
+    if (te && Number(te.dataset.groupId) === draggedGroupId) {
+      clearDropTarget();
+      return;
+    }
+  }
 
-  setDropMode(tabEntry, mode, rect);
-  dropTarget = tabEntry;
+  if (draggedTabId !== null) {
+    const te = target.closest('.tab-entry');
+    if (te && Number(te.dataset.tabId) === draggedTabId) {
+      clearDropTarget();
+      return;
+    }
+  }
+
+  const rect = target.getBoundingClientRect();
+  const y = clientY - rect.top;
+
+  // Group-on-group: before/after only.
+  // Tab-on-group-header: always "child" (add to group, shows dashed outline).
+  // Tab-on-tab: 3-zone (before/child/after).
+  const isGroupDrag = draggedGroupId !== null;
+  const isGroupTarget = target.classList.contains('group-header');
+  let mode;
+  if (isGroupDrag) {
+    mode = resolveDropModeFlat(y, rect);
+  } else if (isGroupTarget) {
+    mode = 'child';
+  } else {
+    mode = resolveDropMode(y, rect);
+  }
+
+  setDropMode(target, mode, rect);
+  dropTarget = target;
 }
 
 function onDragLeave(e) {
-  const tabEntry = e.target.closest('.tab-entry');
-  if (tabEntry) {
-    tabEntry.classList.remove('drop-target-child');
+  const el = e.target.closest('.tab-entry') || e.target.closest('.group-header') || e.target.closest('.window-separator');
+  if (el) {
+    el.classList.remove('drop-target-child');
   }
 }
 
 function onDrop(e) {
   e.preventDefault();
 
+  if (draggedGroupId !== null) {
+    handleGroupDrop(e);
+  } else if (draggedTabId !== null) {
+    // Check if dropped on a window separator
+    const windowSep = e.target.closest('.window-separator');
+    if (windowSep) {
+      handleWindowDrop(windowSep);
+    } else {
+      handleTabDrop(e);
+    }
+  }
+
+  cleanup();
+}
+
+function onDragEnd() {
+  cleanup();
+}
+
+// ---------------------------------------------------------------------------
+// Tab drop (existing behavior)
+// ---------------------------------------------------------------------------
+
+function handleTabDrop(e) {
+  // Drop on a group header — add tab to that group
+  const groupHeader = e.target.closest('.group-header');
+  if (groupHeader && dropMode === 'child') {
+    const targetGroupId = Number(groupHeader.dataset.groupId);
+    chrome.runtime.sendMessage({
+      type: MSG.MOVE_TAB,
+      payload: {
+        tabId: draggedTabId,
+        targetGroupId,
+        position: 'group',
+      },
+    }).catch(() => {});
+    return;
+  }
+
   const tabEntry = e.target.closest('.tab-entry');
-  if (!tabEntry || draggedTabId === null) return;
+  if (!tabEntry) return;
 
   const targetTabId = Number(tabEntry.dataset.tabId);
   if (targetTabId === draggedTabId) return;
@@ -98,17 +202,62 @@ function onDrop(e) {
   const parentId = getParentFromDOM(tabEntry);
   const payload = buildMovePayload(draggedTabId, targetTabId, dropMode, parentId);
 
-  // Send move message to background
+  // Include target windowId so background can detect cross-window moves
+  const targetWindowId = Number(tabEntry.dataset.windowId);
+  if (targetWindowId) payload.targetWindowId = targetWindowId;
+
+  // Include target group so background can sync Chrome group membership
+  const targetGroupId = Number(tabEntry.dataset.groupId);
+  if (targetGroupId !== UNGROUPED_GROUP_ID) {
+    payload.targetGroupId = targetGroupId;
+  }
+
   chrome.runtime.sendMessage({
     type: MSG.MOVE_TAB,
     payload,
-  });
-
-  cleanup();
+  }).catch(() => {});
 }
 
-function onDragEnd() {
-  cleanup();
+/**
+ * Handle drop on a window separator — move tab to that window.
+ * @param {HTMLElement} windowSep - The .window-separator element
+ */
+function handleWindowDrop(windowSep) {
+  const targetWindowId = Number(windowSep.dataset.windowId);
+  if (!targetWindowId || draggedTabId === null) return;
+
+  chrome.runtime.sendMessage({
+    type: MSG.MOVE_TAB,
+    payload: {
+      tabId: draggedTabId,
+      targetWindowId,
+      position: 'window', // signals a cross-window move to end of window
+    },
+  }).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Group drop
+// ---------------------------------------------------------------------------
+
+function handleGroupDrop(e) {
+  const target = e.target.closest('.tab-entry') || e.target.closest('.group-header');
+  if (!target) return;
+
+  const payload = { groupId: draggedGroupId, position: dropMode };
+
+  if (target.classList.contains('group-header')) {
+    // Dropped on another group header — resolve via anchorGroupId
+    payload.anchorGroupId = Number(target.dataset.groupId);
+  } else {
+    // Dropped on a tab entry
+    payload.anchorTabId = Number(target.dataset.tabId);
+  }
+
+  chrome.runtime.sendMessage({
+    type: MSG.MOVE_GROUP,
+    payload,
+  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +280,14 @@ function resolveDropMode(y, rect) {
   if (ratio < 0.25) return 'before';
   if (ratio > 0.75) return 'after';
   return 'child';
+}
+
+/**
+ * Flat drop mode — before/after only (top/bottom half).
+ * Used for group drags and when hovering over group headers.
+ */
+function resolveDropModeFlat(y, rect) {
+  return (y / rect.height) < 0.5 ? 'before' : 'after';
 }
 
 /**
@@ -179,7 +336,7 @@ function buildMovePayload(draggedId, targetId, position, parentId) {
 // Visual feedback
 // ---------------------------------------------------------------------------
 
-function setDropMode(tabEntry, mode, rect) {
+function setDropMode(target, mode, rect) {
   // Clear previous
   if (dropTarget) {
     dropTarget.classList.remove('drop-target-child');
@@ -189,11 +346,11 @@ function setDropMode(tabEntry, mode, rect) {
 
   if (mode === 'child') {
     // Highlight the target tab
-    tabEntry.classList.add('drop-target-child');
+    target.classList.add('drop-target-child');
     dropIndicator.hidden = true;
   } else {
     // Show insertion line
-    tabEntry.classList.remove('drop-target-child');
+    target.classList.remove('drop-target-child');
     dropIndicator.hidden = false;
 
     const left = rect.left;
@@ -229,11 +386,122 @@ function cleanup() {
 
   clearDropTarget();
   draggedTabId = null;
+  draggedGroupId = null;
   dropMode = null;
+  if (_dragOverRafId) {
+    cancelAnimationFrame(_dragOverRafId);
+    _dragOverRafId = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pinned tab drag-to-reorder
+// ---------------------------------------------------------------------------
+
+let draggedPinnedTabId = null;
+let pinnedDropIndicator = null;
+
+/**
+ * Initialize drag-and-drop reordering for pinned tab tiles.
+ * Separate from tree drag — no cross-section support.
+ * @param {HTMLElement} pinnedContainer -- #pinned-list
+ */
+export function initPinnedDragDrop(pinnedContainer) {
+  pinnedDropIndicator = document.createElement('div');
+  pinnedDropIndicator.className = 'pinned-drop-indicator';
+  pinnedDropIndicator.hidden = true;
+  document.body.appendChild(pinnedDropIndicator);
+
+  pinnedContainer.addEventListener('dragstart', onPinnedDragStart);
+  pinnedContainer.addEventListener('dragover', onPinnedDragOver);
+  pinnedContainer.addEventListener('dragleave', onPinnedDragLeave);
+  pinnedContainer.addEventListener('drop', onPinnedDrop);
+  pinnedContainer.addEventListener('dragend', onPinnedDragEnd);
+}
+
+function onPinnedDragStart(e) {
+  const pinnedTab = e.target.closest('.pinned-tab');
+  if (!pinnedTab) return;
+
+  draggedPinnedTabId = Number(pinnedTab.dataset.tabId);
+  pinnedTab.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', `pinned:${draggedPinnedTabId}`);
+  requestAnimationFrame(() => { pinnedTab.style.opacity = '0.4'; });
+}
+
+function onPinnedDragOver(e) {
+  if (draggedPinnedTabId === null) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+
+  const target = e.target.closest('.pinned-tab');
+  if (!target || Number(target.dataset.tabId) === draggedPinnedTabId) {
+    pinnedDropIndicator.hidden = true;
+    return;
+  }
+
+  const rect = target.getBoundingClientRect();
+  const midX = rect.left + rect.width / 2;
+  const position = e.clientX < midX ? 'before' : 'after';
+
+  // Show vertical line indicator
+  pinnedDropIndicator.hidden = false;
+  pinnedDropIndicator.style.top = `${rect.top}px`;
+  pinnedDropIndicator.style.height = `${rect.height}px`;
+  pinnedDropIndicator.style.left = position === 'before'
+    ? `${rect.left - 1}px`
+    : `${rect.right - 1}px`;
+
+  pinnedDropIndicator.dataset.position = position;
+  pinnedDropIndicator.dataset.targetTabId = target.dataset.tabId;
+}
+
+function onPinnedDragLeave() {
+  // Indicator hides when cursor leaves the container (onDragOver stops firing)
+}
+
+function onPinnedDrop(e) {
+  e.preventDefault();
+  if (draggedPinnedTabId === null) return;
+
+  const targetTabId = Number(pinnedDropIndicator.dataset.targetTabId);
+  const position = pinnedDropIndicator.dataset.position;
+
+  if (targetTabId && position && targetTabId !== draggedPinnedTabId) {
+    chrome.runtime.sendMessage({
+      type: MSG.REORDER_PINNED,
+      payload: {
+        tabId: draggedPinnedTabId,
+        targetTabId,
+        position,
+      },
+    }).catch(() => {});
+  }
+
+  pinnedCleanup();
+}
+
+function onPinnedDragEnd() {
+  pinnedCleanup();
+}
+
+function pinnedCleanup() {
+  const dragging = document.querySelector('.pinned-tab.dragging');
+  if (dragging) {
+    dragging.classList.remove('dragging');
+    dragging.style.opacity = '';
+  }
+  if (pinnedDropIndicator) {
+    pinnedDropIndicator.hidden = true;
+    delete pinnedDropIndicator.dataset.position;
+    delete pinnedDropIndicator.dataset.targetTabId;
+  }
+  draggedPinnedTabId = null;
 }
 
 // ---------------------------------------------------------------------------
 // Test exports (pure logic functions, no DOM side effects)
 // ---------------------------------------------------------------------------
 
-export const _testing = { resolveDropMode, getParentFromDOM, buildMovePayload };
+export const _testing = { resolveDropMode, resolveDropModeFlat, getParentFromDOM, buildMovePayload };

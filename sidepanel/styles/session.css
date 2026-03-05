@@ -1,0 +1,309 @@
+/* Session Manager + Recently Closed Tabs */
+
+/* ---------------------------------------------------------------------------
+   Session Manager Overlay
+   --------------------------------------------------------------------------- */
+
+.session-manager {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+  max-height: 50vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.session-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.session-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.session-actions {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-save-btn {
+  width: 100%;
+  padding: 6px 12px;
+  background: var(--accent, #c084fc);
+  color: var(--bg-primary);
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.session-save-btn:hover {
+  opacity: 0.85;
+}
+
+.session-list {
+  padding: 4px 0;
+}
+
+.session-group-label {
+  padding: 6px 12px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-weight: 600;
+}
+
+.session-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: default;
+  transition: background 0.1s;
+}
+
+.session-entry:hover {
+  background: var(--bg-hover);
+}
+
+.session-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.session-entry-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.session-entry:hover .session-entry-actions {
+  opacity: 1;
+}
+
+.session-restore-btn,
+.session-delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.session-restore-btn:hover {
+  color: var(--accent, #c084fc);
+  background: var(--bg-hover);
+}
+
+.session-delete-btn:hover {
+  color: #f87171;
+  background: var(--bg-hover);
+}
+
+.session-empty,
+.session-loading {
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------------------
+   Recently Closed Tabs Panel
+   --------------------------------------------------------------------------- */
+
+.recently-closed {
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  max-height: 40vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.rc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rc-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.rc-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.rc-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.rc-list {
+  padding: 2px 0;
+}
+
+.rc-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.rc-entry:hover {
+  background: var(--bg-hover);
+}
+
+.rc-favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.rc-favicon-placeholder {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background: var(--text-tertiary, var(--text-secondary));
+  border-radius: 50%;
+  opacity: 0.3;
+}
+
+.rc-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.rc-tab-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rc-tab-url {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------------
+   Toolbar Undo / Session / Recently Closed buttons
+   --------------------------------------------------------------------------- */
+
+.toolbar-buttons button {
+  position: relative;
+}
+
+.undo-btn-indicator {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 5px;
+  height: 5px;
+  background: var(--accent, #c084fc);
+  border-radius: 50%;
+}
+
+/* Crash recovery banner */
+.crash-recovery-banner {
+  padding: 10px 12px;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.crash-recovery-banner .cr-text {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.crash-recovery-banner .cr-text strong {
+  color: var(--accent, #c084fc);
+}
+
+.crash-recovery-banner button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cr-restore-btn {
+  background: var(--accent, #c084fc);
+  color: var(--bg-primary);
+  font-weight: 500;
+}
+
+.cr-dismiss-btn {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.cr-dismiss-btn:hover {
+  color: var(--text-primary);
+}

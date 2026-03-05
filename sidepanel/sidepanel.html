@@ -9,14 +9,36 @@
   <link rel="stylesheet" href="styles/tree.css">
   <link rel="stylesheet" href="styles/search.css">
   <link rel="stylesheet" href="styles/context-menu.css">
+  <link rel="stylesheet" href="styles/session.css">
+  <link rel="stylesheet" href="styles/command-palette.css">
+  <link rel="stylesheet" href="styles/workspace.css">
 </head>
 <body>
   <div id="app">
     <header id="header">
       <div class="search-container">
         <input type="text" id="search-input" placeholder="Search tabs..." autocomplete="off">
+        <button id="search-clear" class="search-clear" hidden aria-label="Clear search">&times;</button>
       </div>
       <div class="toolbar-buttons">
+        <button id="undo-close-btn" title="Undo Close Tab (Ctrl+Z)" aria-label="Undo Close Tab">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 5l-2 2 2 2"/>
+            <path d="M1 7h8a3 3 0 1 1 0 6H8"/>
+          </svg>
+        </button>
+        <button id="sessions-btn" title="Sessions" aria-label="Sessions">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="2" y="1.5" width="10" height="11" rx="1.5"/>
+            <path d="M5 4.5h4M5 7h4M5 9.5h2"/>
+          </svg>
+        </button>
+        <button id="recently-closed-btn" title="Recently Closed Tabs" aria-label="Recently Closed Tabs">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
+            <circle cx="7" cy="7" r="5.5"/>
+            <path d="M7 4v3.5l2.5 1.5"/>
+          </svg>
+        </button>
         <button id="collapse-all-btn" title="Collapse All" aria-label="Collapse All">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
             <rect x="1.5" y="1.5" width="11" height="11" rx="2"/>
@@ -51,20 +73,32 @@
 
     <main id="tree-container"></main>
 
+    <div id="workspace-bar"></div>
+
     <footer id="footer">
       <div class="tab-count"><span id="tab-count-num">0</span> tabs</div>
+      <button id="add-new-tab-btn" class="add-new-tab-btn" title="Open a new tab">+ Add New Tab</button>
       <div class="theme-selector">
         <select id="theme-select">
-          <option value="august-default">August</option>
-          <option value="midnight-mars">Midnight Mars</option>
-          <option value="deep-forest">Deep Forest</option>
-          <option value="oceanic-depth">Oceanic Depth</option>
-          <option value="palenight">Palenight</option>
-          <option value="espresso">Espresso</option>
-          <option value="cyberpunk-dim">Cyberpunk</option>
-          <option value="nord-darker">Nord</option>
-          <option value="dracula-soft">Dracula</option>
-          <option value="oled-void">OLED Void</option>
+          <optgroup label="August Suite">
+            <option value="august-default">August</option>
+            <option value="midnight-mars">Midnight Mars</option>
+            <option value="deep-forest">Deep Forest</option>
+            <option value="oceanic-depth">Oceanic Depth</option>
+            <option value="palenight">Palenight</option>
+            <option value="espresso">Espresso</option>
+            <option value="cyberpunk-dim">Cyberpunk Dim</option>
+            <option value="nord-darker">Nord</option>
+            <option value="dracula-soft">Dracula</option>
+            <option value="oled-void">OLED Void</option>
+          </optgroup>
+          <optgroup label="Cyberpunk Suite">
+            <option value="arasaka-executive">Arasaka Executive</option>
+            <option value="netrunner">Netrunner</option>
+            <option value="synthwave-sunset">Synthwave Sunset</option>
+            <option value="toxic-district">Toxic District</option>
+            <option value="cyberpsychosis">Cyberpsychosis</option>
+          </optgroup>
         </select>
       </div>
     </footer>

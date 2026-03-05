@@ -1,5 +1,6 @@
 .search-container {
   flex: 1;
+  position: relative;
 }
 
 #search-input {
@@ -8,10 +9,30 @@
   border: 1px solid var(--search-border);
   border-radius: 6px;
   color: var(--text-primary);
-  padding: 6px 10px;
+  padding: 6px 24px 6px 10px;
   font-size: 12px;
   outline: none;
   transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.search-clear:hover {
+  color: var(--text-primary);
 }
 
 #search-input:focus {
@@ -40,7 +61,7 @@
 }
 
 .search-url-visible {
-  display: block !important;
+  display: block;
   font-size: 11px;
   margin-top: 2px;
 }
