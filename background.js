@@ -7,7 +7,7 @@
  */
 
 import { ShadowState } from './shared/shadow-state.js';
-import { MSG, STORAGE_KEY, SAVE_DEBOUNCE_MS, THEME_ACCENTS, UNGROUPED_GROUP_ID, SAVED_GROUPS_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, MAX_AUTO_SAVES, SETTINGS_KEY, AUTO_GROUP_RULES_KEY, WORKSPACES_KEY, TAB_NOTES_KEY } from './shared/constants.js';
+import { MSG, STORAGE_KEY, SAVE_DEBOUNCE_MS, THEME_ACCENTS, UNGROUPED_GROUP_ID, SAVED_GROUPS_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, MAX_AUTO_SAVES, SETTINGS_KEY, AUTO_GROUP_RULES_KEY, WORKSPACES_KEY, TAB_NOTES_KEY, SUPPRESS_COLLAPSE_MS, SUPPRESS_TITLE_MS, RETRY_GROUP_TITLE_DELAYS } from './shared/constants.js';
 import { debounce } from './shared/utils.js';
 import { nearestChromeGroupColor } from './shared/color-distance.js';
 
@@ -30,8 +30,11 @@ let activeTabId = null;
 /** @type {number|null} Currently focused window ID */
 let currentWindowId = null;
 
-/** Suppresses spurious group-collapse events after tab removal */
-let suppressGroupCollapse = false;
+/** Suppresses spurious group-collapse events after tab removal (counter pattern) */
+let suppressGroupCollapseCount = 0;
+
+/** Suppresses group-title overwrite from onUpdated during programmatic rename (counter pattern) */
+let suppressGroupTitleCount = 0;
 
 /** @type {Object} User-configurable settings */
 let settings = {
@@ -59,8 +62,13 @@ let tabNotes = {};
  * tab removal, group toggle, and group move operations.
  */
 function suppressGroupCollapseForBurst() {
-  suppressGroupCollapse = true;
-  setTimeout(() => { suppressGroupCollapse = false; }, 200);
+  suppressGroupCollapseCount++;
+  setTimeout(() => { suppressGroupCollapseCount--; }, SUPPRESS_COLLAPSE_MS);
+}
+
+function suppressGroupTitleForBurst() {
+  suppressGroupTitleCount++;
+  setTimeout(() => { suppressGroupTitleCount--; }, SUPPRESS_TITLE_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +80,12 @@ function suppressGroupCollapseForBurst() {
  * Called after every state mutation.
  */
 const saveState = debounce(() => {
-  chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() });
+  try {
+    chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() })
+      .catch(err => console.error('[LinkMap] saveState failed:', err));
+  } catch (err) {
+    console.error('[LinkMap] saveState serialization failed:', err);
+  }
   DEBUG && console.log('[LinkMap] State saved');
 }, SAVE_DEBOUNCE_MS);
 
@@ -94,6 +107,7 @@ function getStatePayload() {
     groups: Object.fromEntries(state.groups),
     groupColors: state.groupColors,
     theme: state.theme,
+    windowNames: Object.fromEntries(state.windowNames),
     activeTabId: activeTabId,
     currentWindowId: currentWindowId,
     duplicates: getDuplicateMap(),
@@ -121,6 +135,53 @@ const broadcastState = debounce(() => {
     // Synchronous throw — side panel not open.
   }
 }, 16);
+
+/** Convenience: save + broadcast in one call. */
+function commitState() { saveState(); broadcastState(); }
+
+// ---------------------------------------------------------------------------
+// Initialization helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Retries querying Chrome for group titles that weren't available at init time.
+ * Chrome may not have restored all group titles by the time init() queries them.
+ * Uses exponential backoff via RETRY_GROUP_TITLE_DELAYS.
+ */
+function retryMissingGroupTitles(state, commitState) {
+  let retryCount = 0;
+  const retryDelays = RETRY_GROUP_TITLE_DELAYS;
+  function attempt() {
+    if (retryCount >= retryDelays.length) return;
+    setTimeout(async () => {
+      try {
+        const groups = await chrome.tabGroups.query({});
+        let updated = false;
+        let allHaveTitles = true;
+        for (const g of groups) {
+          const existing = state.groups.get(g.id);
+          if (existing && !existing.title) {
+            if (g.title) {
+              existing.title = g.title;
+              updated = true;
+            } else {
+              allHaveTitles = false;
+            }
+          }
+        }
+        if (updated) {
+          commitState();
+          DEBUG && console.log(`[LinkMap] Recovered group titles on retry ${retryCount + 1}`);
+        }
+        retryCount++;
+        if (!allHaveTitles && retryCount < retryDelays.length) attempt();
+      } catch (e) {
+        // Service worker may have been suspended — safe to ignore
+      }
+    }, retryDelays[retryCount]);
+  }
+  attempt();
+}
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -152,16 +213,36 @@ async function init() {
       state = ShadowState.fromStorage(savedData);
     }
 
+    // 2b. Snapshot group membership counts BEFORE tab reconciliation
+    //     (reconcileWithLiveTabs overwrites groupId to new Chrome IDs)
+    const savedGroupTabCounts = new Map();
+    for (const [, tab] of state.tabs) {
+      const gid = tab.groupId;
+      if (gid && gid !== -1) {
+        savedGroupTabCounts.set(gid, (savedGroupTabCounts.get(gid) || 0) + 1);
+      }
+    }
+
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    state.reconcileWithLiveTabs(liveTabs);
+    const windowIdMap = state.reconcileWithLiveTabs(liveTabs);
 
     // 3c. Check for crash recovery
     checkForCrashRecovery(savedTabCount, liveTabs.length);
 
     // 3b. Query all live tab groups and reconcile
     const liveGroups = await chrome.tabGroups.query({});
-    state.reconcileWithLiveGroups(liveGroups);
+    state.reconcileWithLiveGroups(liveGroups, savedGroupTabCounts, windowIdMap);
+
+    // 3d. Push rescued titles back to Chrome so its UI shows them
+    //     and subsequent onUpdated events carry the correct title.
+    for (const group of liveGroups) {
+      const saved = state.groups.get(group.id);
+      if (saved?.title && !group.title) {
+        suppressGroupTitleForBurst();
+        chrome.tabGroups.update(group.id, { title: saved.title }).catch(() => {});
+      }
+    }
 
     // 4. Identify the active tab and current window
     const currentWindow = await chrome.windows.getCurrent();
@@ -194,6 +275,7 @@ async function init() {
     broadcastState();
 
     initComplete = true;
+    retryMissingGroupTitles(state, commitState);
     console.log(`[LinkMap] Initialized with ${state.tabs.size} tabs, ${state.groups.size} groups`);
   } catch (err) {
     console.error('[LinkMap] Init error:', err);
@@ -219,6 +301,7 @@ function setupAutoSaveAlarm() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTO_SAVE_ALARM) {
+    if (!settings.autoSaveEnabled) return;
     saveSession('Auto-Save', true);
   }
 });
@@ -231,12 +314,27 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 async function saveSession(name, isAutoSave = false) {
   if (state.tabs.size === 0) return; // nothing to save
 
+  // Compute window breakdown for session metadata
+  const windowBreakdown = {};
+  for (const [, tab] of state.tabs) {
+    const wid = tab.windowId;
+    if (!windowBreakdown[wid]) {
+      windowBreakdown[wid] = {
+        tabCount: 0,
+        name: state.getWindowName(wid) || null,
+      };
+    }
+    windowBreakdown[wid].tabCount++;
+  }
+
   const session = {
     id: `${isAutoSave ? 'auto' : 'manual'}-${Date.now()}`,
     name,
     isAutoSave,
     savedAt: Date.now(),
     tabCount: state.tabs.size,
+    windowCount: Object.keys(windowBreakdown).length,
+    windows: windowBreakdown,
     data: state.toSerializable(),
   };
 
@@ -271,42 +369,165 @@ async function saveSession(name, isAutoSave = false) {
 }
 
 /**
- * Restores a saved session: creates tabs, rebuilds tree, recreates groups.
- * Restores in batches to avoid overwhelming Chrome.
- * @param {string} sessionId
+ * Creates Chrome windows for session restore, mapping saved windowIds to new ones.
+ * Reuses the current window for the first saved windowId, creates new windows for the rest.
+ * @param {number[]} savedWindowIds - Unique window IDs from the saved session
+ * @param {chrome.windows.Window} currentWindow - The currently focused Chrome window
+ * @returns {Promise<{windowMap: Map<number, number>, defaultTabsToClose: number[]}>}
+ *   windowMap: saved windowId -> new Chrome windowId
+ *   defaultTabsToClose: IDs of default newtabs Chrome auto-creates in new windows
  */
-async function restoreSession(sessionId) {
+async function createWindowsForRestore(savedWindowIds, currentWindow) {
+  const windowMap = new Map();
+  const defaultTabsToClose = [];
+
+  for (let i = 0; i < savedWindowIds.length; i++) {
+    if (i === 0) {
+      windowMap.set(savedWindowIds[0], currentWindow.id);
+    } else {
+      try {
+        const newWin = await chrome.windows.create({ focused: false });
+        windowMap.set(savedWindowIds[i], newWin.id);
+        // Track the default newtab Chrome creates so we can close it later
+        const newWinTabs = await chrome.tabs.query({ windowId: newWin.id });
+        if (newWinTabs.length > 0) {
+          defaultTabsToClose.push(newWinTabs[0].id);
+        }
+      } catch (err) {
+        console.error('[LinkMap] Failed to create window for restore:', err);
+        // Fallback: use current window
+        windowMap.set(savedWindowIds[i], currentWindow.id);
+      }
+    }
+  }
+
+  return { windowMap, defaultTabsToClose };
+}
+
+/**
+ * Batch-creates tabs in correct windows, returning ID mappings.
+ * Processes tabs in batches of 10 for controlled parallelism.
+ * @param {Object[]} savedTabs - Array of saved tab objects
+ * @param {Map<number, number>} windowMap - saved windowId -> new Chrome windowId
+ * @param {chrome.windows.Window} currentWindow - Fallback window
+ * @returns {Promise<{oldToNewId: Map<number, number>, newTabWindowId: Map<number, number>}>}
+ *   oldToNewId: saved tabId -> new Chrome tabId
+ *   newTabWindowId: new tabId -> actual windowId it was created in
+ */
+async function createTabsForRestore(savedTabs, windowMap, currentWindow) {
+  const BATCH_SIZE = 10;
+  const oldToNewId = new Map();
+  const newTabWindowId = new Map();
+
+  for (let i = 0; i < savedTabs.length; i += BATCH_SIZE) {
+    const batch = savedTabs.slice(i, i + BATCH_SIZE);
+    const promises = batch.map(async (savedTab) => {
+      try {
+        const targetWindowId = windowMap.get(savedTab.windowId) ?? currentWindow.id;
+        const newTab = await chrome.tabs.create({
+          url: savedTab.url || 'chrome://newtab',
+          active: false,
+          windowId: targetWindowId,
+          pinned: savedTab.pinned || false,
+        });
+        oldToNewId.set(savedTab.tabId, newTab.id);
+        newTabWindowId.set(newTab.id, targetWindowId);
+      } catch (err) {
+        console.error(`[LinkMap] Failed to restore tab "${savedTab.title}":`, err);
+      }
+    });
+    await Promise.all(promises);
+  }
+
+  return { oldToNewId, newTabWindowId };
+}
+
+/**
+ * Recreates Chrome tab groups from saved group data.
+ * Partitions tabs by window to avoid cross-window grouping errors.
+ * @param {[string, Object][]} groupEntries - Object.entries of saved groups
+ * @param {Object[]} savedTabs - Array of saved tab objects
+ * @param {Map<number, number>} oldToNewId - saved tabId -> new Chrome tabId
+ * @param {Map<number, number>} newTabWindowId - new tabId -> actual windowId
+ * @param {chrome.windows.Window} currentWindow - Fallback window
+ * @param {number|null} windowIdFilter - Optional saved windowId filter
+ */
+async function rebuildGroupsForRestore(groupEntries, savedTabs, oldToNewId, newTabWindowId, currentWindow, windowIdFilter) {
+  for (const [oldGroupIdStr, groupData] of groupEntries) {
+    const oldGroupId = Number(oldGroupIdStr);
+    // Skip groups not in the filtered window
+    if (windowIdFilter != null && groupData.windowId !== windowIdFilter) continue;
+
+    const groupTabIds = savedTabs
+      .filter(t => t.groupId === oldGroupId)
+      .map(t => oldToNewId.get(t.tabId))
+      .filter(Boolean);
+
+    if (groupTabIds.length > 0) {
+      try {
+        // Partition tabs by actual window to avoid cross-window grouping error
+        const tabsByWindow = new Map();
+        for (const tid of groupTabIds) {
+          const wid = newTabWindowId.get(tid) ?? currentWindow.id;
+          if (!tabsByWindow.has(wid)) tabsByWindow.set(wid, []);
+          tabsByWindow.get(wid).push(tid);
+        }
+        for (const [, windowTabIds] of tabsByWindow) {
+          const newGroupId = await chrome.tabs.group({ tabIds: windowTabIds });
+          await chrome.tabGroups.update(newGroupId, {
+            title: groupData.title || '',
+            color: groupData.color || 'grey',
+            collapsed: groupData.collapsed || false,
+          });
+        }
+      } catch (err) {
+        console.error(`[LinkMap] Failed to restore group "${groupData.title}":`, err);
+      }
+    }
+  }
+}
+
+/**
+ * Restores a saved session: creates tabs in their original windows,
+ * rebuilds tree structure, and recreates tab groups.
+ *
+ * When windowIdFilter is provided, only tabs from that saved windowId
+ * are restored (single-window restore).
+ *
+ * @param {string} sessionId
+ * @param {number|null} [windowIdFilter=null] - Optional saved windowId to restore selectively
+ */
+async function restoreSession(sessionId, windowIdFilter = null) {
   try {
     const result = await chrome.storage.local.get(SESSIONS_KEY);
     const sessions = result[SESSIONS_KEY] || [];
     const session = sessions.find(s => s.id === sessionId);
     if (!session?.data) return;
 
-    const savedTabs = Object.values(session.data.tabs || {});
+    let savedTabs = Object.values(session.data.tabs || {});
+    if (windowIdFilter != null) {
+      savedTabs = savedTabs.filter(t => t.windowId === windowIdFilter);
+    }
     if (savedTabs.length === 0) return;
 
-    // Batch create tabs (10 at a time)
-    const BATCH_SIZE = 10;
-    const oldToNewId = new Map();
+    // Identify unique saved windowIds (preserve insertion order for stability)
+    const savedWindowIds = [...new Set(savedTabs.map(t => t.windowId))];
 
-    for (let i = 0; i < savedTabs.length; i += BATCH_SIZE) {
-      const batch = savedTabs.slice(i, i + BATCH_SIZE);
-      const promises = batch.map(async (savedTab) => {
-        try {
-          const newTab = await chrome.tabs.create({
-            url: savedTab.url || 'chrome://newtab',
-            active: false,
-          });
-          oldToNewId.set(savedTab.tabId, newTab.id);
-        } catch (err) {
-          console.error(`[LinkMap] Failed to restore tab "${savedTab.title}":`, err);
-        }
-      });
-      await Promise.all(promises);
+    const currentWindow = await chrome.windows.getCurrent();
+
+    // 1. Create Chrome windows
+    const { windowMap, defaultTabsToClose } = await createWindowsForRestore(savedWindowIds, currentWindow);
+
+    // 2. Batch create tabs in correct windows
+    const { oldToNewId, newTabWindowId } = await createTabsForRestore(savedTabs, windowMap, currentWindow);
+
+    // Close default newtabs in newly created windows
+    for (const tabId of defaultTabsToClose) {
+      try { await chrome.tabs.remove(tabId); } catch (e) { /* may already be gone */ }
     }
 
-    // Rebuild tree structure in ShadowState using the new tab IDs
-    // Reparent children based on saved parent-child relationships
+    // 3. Rebuild tree structure — collect children per parent, sorted by saved index
+    const childrenByParent = new Map();
     for (const savedTab of savedTabs) {
       const newId = oldToNewId.get(savedTab.tabId);
       if (!newId) continue;
@@ -316,44 +537,33 @@ async function restoreSession(sessionId) {
         : null;
 
       if (newParentId != null) {
-        state.moveTab(newId, newParentId, 0);
+        if (!childrenByParent.has(newParentId)) childrenByParent.set(newParentId, []);
+        childrenByParent.get(newParentId).push({ newId, index: savedTab.index ?? 0 });
+      }
+    }
+    for (const [parentId, children] of childrenByParent) {
+      children.sort((a, b) => a.index - b.index);
+      for (const child of children) {
+        state.moveTab(child.newId, parentId, Infinity);
       }
     }
 
-    // Recreate Chrome tab groups from saved group data
+    // 4. Recreate Chrome tab groups from saved group data
     if (session.data.groups) {
       const groupEntries = Object.entries(session.data.groups);
-      const oldGroupToNew = new Map();
+      await rebuildGroupsForRestore(groupEntries, savedTabs, oldToNewId, newTabWindowId, currentWindow, windowIdFilter);
+    }
 
-      for (const [oldGroupIdStr, groupData] of groupEntries) {
-        const oldGroupId = Number(oldGroupIdStr);
-        // Find tabs that belonged to this group
-        const groupTabIds = savedTabs
-          .filter(t => t.groupId === oldGroupId)
-          .map(t => oldToNewId.get(t.tabId))
-          .filter(Boolean);
-
-        if (groupTabIds.length > 0) {
-          try {
-            const newGroupId = await chrome.tabs.group({ tabIds: groupTabIds });
-            oldGroupToNew.set(oldGroupId, newGroupId);
-            // Apply group title and color
-            await chrome.tabGroups.update(newGroupId, {
-              title: groupData.title || '',
-              color: groupData.color || 'grey',
-              collapsed: groupData.collapsed || false,
-            });
-          } catch (err) {
-            console.error(`[LinkMap] Failed to restore group "${groupData.title}":`, err);
-          }
-        }
+    // 5. Apply saved window names to the new windowIds
+    if (session.data.windowNames) {
+      for (const [savedWidStr, name] of Object.entries(session.data.windowNames)) {
+        const newWid = windowMap.get(Number(savedWidStr));
+        if (newWid) state.setWindowName(newWid, name);
       }
     }
 
-    saveState();
-    broadcastState();
-
-    console.log(`[LinkMap] Session restored: "${session.name}" (${oldToNewId.size} tabs)`);
+    commitState();
+    console.log(`[LinkMap] Session restored: "${session.name}" (${oldToNewId.size} tabs across ${savedWindowIds.length} windows)`);
   } catch (err) {
     console.error('[LinkMap] Failed to restore session:', err);
   }
@@ -389,6 +599,8 @@ async function getSessions() {
       isAutoSave: s.isAutoSave,
       savedAt: s.savedAt,
       tabCount: s.tabCount,
+      windowCount: s.windowCount,
+      windows: s.windows,
     }));
   } catch (err) {
     console.error('[LinkMap] Failed to get sessions:', err);
@@ -466,7 +678,7 @@ function checkForCrashRecovery(savedTabCount, liveTabCount) {
     // Broadcast a crash-recovery signal to the side panel
     try {
       chrome.runtime.sendMessage({
-        type: 'CRASH_RECOVERY',
+        type: MSG.CRASH_RECOVERY,
         payload: { savedTabCount, liveTabCount },
       }).catch(() => {});
     } catch (_e) {}
@@ -513,7 +725,7 @@ async function archiveStaleTabs() {
         try {
           await chrome.tabs.discard(tab.id);
           DEBUG && console.log(`[LinkMap] Auto-archived stale tab: ${tab.id} "${tab.title}"`);
-        } catch (_) {}
+        } catch (_) { DEBUG && console.warn('[LinkMap] Archive error:', _); }
       }
     }
   } catch (err) {
@@ -554,14 +766,26 @@ async function loadAutoGroupRules() {
 }
 
 async function saveAutoGroupRules() {
-  await chrome.storage.local.set({ [AUTO_GROUP_RULES_KEY]: autoGroupRules });
+  try {
+    await chrome.storage.local.set({ [AUTO_GROUP_RULES_KEY]: autoGroupRules });
+  } catch (err) {
+    console.error('[LinkMap] saveAutoGroupRules failed:', err);
+  }
 }
+
+// Serializes concurrent applyAutoGroupRules calls to prevent duplicate group creation.
+let autoGroupLock = Promise.resolve();
 
 /**
  * Checks if a tab URL matches any auto-group rule and groups it accordingly.
  * @param {Object} tab - Chrome tab object
  */
-async function applyAutoGroupRules(tab) {
+function applyAutoGroupRules(tab) {
+  autoGroupLock = autoGroupLock.then(() => _applyAutoGroupRulesImpl(tab)).catch(() => {});
+  return autoGroupLock;
+}
+
+async function _applyAutoGroupRulesImpl(tab) {
   if (!tab.url || autoGroupRules.length === 0) return;
   if (tab.pinned) return;
 
@@ -638,6 +862,11 @@ async function getVisitCount(url) {
   try {
     const visits = await chrome.history.getVisits({ url });
     const count = visits.length;
+    // Cap cache at 500 entries — evict oldest when exceeded
+    if (visitCountCache.size >= 500) {
+      const oldest = visitCountCache.keys().next().value;
+      visitCountCache.delete(oldest);
+    }
     visitCountCache.set(url, { count, time: Date.now() });
     return count;
   } catch {
@@ -728,8 +957,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 
   state.addTab(tab.id, node);
   invalidateDuplicateMap();
-  saveState();
-  broadcastState();
+  commitState();
 
   // Auto-group: check if new tab matches any domain rules
   if (tab.url) applyAutoGroupRules(tab);
@@ -749,11 +977,19 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
     activeTabId = null;
   }
 
+  // Clean up tab notes for closed tab
+  delete tabNotes[tabId];
+
+  // Prune closed tabId from all workspaces
+  for (const ws of workspaces) {
+    const idx = ws.tabIds.indexOf(tabId);
+    if (idx !== -1) ws.tabIds.splice(idx, 1);
+  }
+
   // Chrome fires spurious tabGroups.onUpdated(collapsed: true) after tab removal.
   suppressGroupCollapseForBurst();
 
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Tab removed: ${tabId}`);
 });
@@ -806,18 +1042,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
       if (node.parentId != null) {
         state.moveTab(tabId, null, 0);
       }
-      // BUG 4: Reposition to end of pinned zone
-      const boundary = getPinnedBoundaryIndex();
-      state.moveTab(tabId, null, Math.max(0, boundary - 1));
+      // BUG 4: Reposition to end of pinned zone (exclude self to avoid off-by-one)
+      const boundary = getPinnedBoundaryIndex(tabId);
+      state.moveTab(tabId, null, Math.max(0, boundary));
     } else if (node && !changeInfo.pinned) {
       // BUG 4: Move to just after pinned zone
-      const boundary = getPinnedBoundaryIndex();
+      const boundary = getPinnedBoundaryIndex(tabId);
       state.moveTab(tabId, null, boundary);
     }
   }
 
-  saveState();
-  broadcastState();
+  commitState();
 });
 
 /**
@@ -826,8 +1061,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, _tab) => {
 chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
   if (!initComplete) return;
   state.updateTab(tabId, { index: moveInfo.toIndex });
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Tab moved: ${tabId} to index ${moveInfo.toIndex}`);
 });
@@ -859,8 +1093,7 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
     windowId: attachInfo.newWindowId,
     index: attachInfo.newPosition,
   });
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Tab attached: ${tabId} to window ${attachInfo.newWindowId}`);
 });
@@ -872,8 +1105,7 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
 chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
   if (!initComplete) return;
   DEBUG && console.log(`[LinkMap] Tab detached: ${tabId} from window ${detachInfo.oldWindowId}`);
-  saveState();
-  broadcastState();
+  commitState();
 });
 
 /**
@@ -881,9 +1113,9 @@ chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
  * Remaps the old ID to the new ID in ShadowState, preserving tree structure.
  */
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  if (!initComplete) return;
   state.replaceTabId(removedTabId, addedTabId);
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Tab replaced: ${removedTabId} → ${addedTabId}`);
 });
@@ -978,8 +1210,7 @@ function getDuplicateMap() {
 chrome.tabGroups.onCreated.addListener((group) => {
   if (!initComplete) return;
   state.addGroup(group);
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Group created: ${group.id} "${group.title || 'untitled'}"`);
 });
@@ -990,18 +1221,24 @@ chrome.tabGroups.onCreated.addListener((group) => {
 chrome.tabGroups.onUpdated.addListener((group) => {
   if (!initComplete) return;
   const updates = {
-    title: group.title,
     color: group.color,
   };
+  // Only apply title if not suppressed (prevents stale title overwrite during rename)
+  if (suppressGroupTitleCount === 0) {
+    // Don't overwrite a saved title with an empty one (session restore race)
+    const existing = state.groups.get(group.id);
+    if (group.title || !existing?.title) {
+      updates.title = group.title;
+    }
+  }
   // Only apply collapse state if not suppressed (prevents spurious collapse on tab close)
-  if (!(suppressGroupCollapse && group.collapsed)) {
+  if (!(suppressGroupCollapseCount > 0 && group.collapsed)) {
     updates.collapsed = group.collapsed;
   }
   state.updateGroup(group.id, updates);
-  saveState();
-  broadcastState();
+  commitState();
 
-  DEBUG && console.log(`[LinkMap] Group updated: ${group.id} "${group.title || 'untitled'}" collapsed=${group.collapsed}${suppressGroupCollapse ? ' (suppressed)' : ''}`);
+  DEBUG && console.log(`[LinkMap] Group updated: ${group.id} "${group.title || 'untitled'}" collapsed=${group.collapsed}${suppressGroupCollapseCount > 0 ? ' (suppressed)' : ''}`);
 });
 
 /**
@@ -1010,8 +1247,7 @@ chrome.tabGroups.onUpdated.addListener((group) => {
 chrome.tabGroups.onRemoved.addListener((group) => {
   if (!initComplete) return;
   state.removeGroup(group.id);
-  saveState();
-  broadcastState();
+  commitState();
 
   DEBUG && console.log(`[LinkMap] Group removed: ${group.id}`);
 });
@@ -1049,27 +1285,35 @@ chrome.runtime.onSuspend.addListener(() => {
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || typeof message !== 'object') return;
   const { type, payload } = message;
 
   switch (type) {
     case MSG.GET_STATE:
       initDone.then(async () => {
         const payload = getStatePayload();
-        payload.visitFrequency = await computeVisitFrequencies();
+        try {
+          payload.visitFrequency = await computeVisitFrequencies();
+        } catch (err) {
+          DEBUG && console.warn('[LinkMap] Visit frequency error:', err);
+          payload.visitFrequency = {};
+        }
         sendResponse(payload);
       });
       return true; // keep channel open for async response
 
     case MSG.ACTIVATE_TAB:
-      chrome.tabs.update(payload.tabId, { active: true });
+      chrome.tabs.update(payload.tabId, { active: true }).catch(err => {
+        console.warn('[LinkMap] ACTIVATE_TAB failed:', err);
+      });
       break;
 
     case MSG.CLOSE_TAB:
-      chrome.tabs.remove(payload.tabId);
+      chrome.tabs.remove(payload.tabId).catch(() => {});
       break;
 
     case MSG.CLOSE_TABS:
-      chrome.tabs.remove(payload.tabIds);
+      chrome.tabs.remove(payload.tabIds).catch(() => {});
       break;
 
     case MSG.MOVE_TAB: {
@@ -1102,8 +1346,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
           }
         }
-        saveState();
-        broadcastState();
+        commitState();
       }
       break;
     }
@@ -1122,33 +1365,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
       }
 
-      saveState();
-      broadcastState();
+      commitState();
       break;
     }
 
     case MSG.COLLAPSE_ALL:
       state.collapseAll();
-      saveState();
-      broadcastState();
+      commitState();
       break;
 
     case MSG.EXPAND_ALL:
       state.expandAll();
-      saveState();
-      broadcastState();
+      commitState();
       break;
 
     case MSG.FOCUS_MODE:
       state.focusOnBranch(payload.tabId);
-      saveState();
-      broadcastState();
+      commitState();
       break;
 
     case MSG.SET_THEME:
       state.setTheme(payload.theme);
-      saveState();
-      broadcastState();
+      commitState();
       try {
         chrome.runtime.sendMessage({
           type: MSG.THEME_CHANGED,
@@ -1163,8 +1401,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case MSG.SET_GROUP_COLOR: {
       state.setGroupColor(payload.groupId, payload.color);
-      saveState();
-      broadcastState();
+      commitState();
       // Smart Mapper: sync custom hex to nearest Chrome enum
       const chromeColor = nearestChromeGroupColor(payload.color);
       chrome.tabGroups.update(payload.groupId, { color: chromeColor }).catch(() => {});
@@ -1172,7 +1409,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case MSG.PIN_TAB:
-      chrome.tabs.update(payload.tabId, { pinned: payload.pinned });
+      chrome.tabs.update(payload.tabId, { pinned: payload.pinned }).catch((err) => {
+        console.warn('[LinkMap] PIN_TAB failed:', err.message, 'tabId:', payload.tabId);
+      });
       break;
 
     case MSG.DUPLICATE_TAB: {
@@ -1185,8 +1424,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             if (sourceIdx !== -1) {
               state.moveTab(newTab.id, null, sourceIdx + 1);
             }
-            saveState();
-            broadcastState();
+            commitState();
           }
         } catch (err) {
           console.error('[LinkMap] Duplicate failed:', err);
@@ -1196,17 +1434,40 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case MSG.MUTE_TAB:
-      chrome.tabs.update(payload.tabId, { muted: payload.muted });
+      chrome.tabs.update(payload.tabId, { muted: payload.muted }).catch(() => {});
       break;
 
     case MSG.NEW_TAB_BELOW: {
       const refTab = state.getTab(payload.tabId);
       if (refTab) {
-        chrome.tabs.create({
-          windowId: refTab.windowId,
-          index: refTab.index + 1,
-          openerTabId: payload.tabId,
-        });
+        (async () => {
+          try {
+            const newTab = await chrome.tabs.create({
+              windowId: refTab.windowId,
+              index: refTab.index + 1,
+              openerTabId: payload.tabId,
+            });
+            // onCreated already fired — reposition as sibling immediately after ref tab
+            if (newTab?.id) {
+              const refParentId = refTab.parentId ?? null;
+              if (refParentId != null) {
+                const parent = state.getTab(refParentId);
+                if (parent) {
+                  const refIdx = parent.children.indexOf(payload.tabId);
+                  state.moveTab(newTab.id, refParentId, refIdx + 1);
+                }
+              } else {
+                const refIdx = state.rootIds.indexOf(payload.tabId);
+                if (refIdx !== -1) {
+                  state.moveTab(newTab.id, null, refIdx + 1);
+                }
+              }
+              commitState();
+            }
+          } catch (err) {
+            console.error('[LinkMap] NEW_TAB_BELOW failed:', err);
+          }
+        })();
       }
       break;
     }
@@ -1214,21 +1475,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case MSG.NEW_TAB_IN_GROUP: {
       const { groupId: newTabGid } = payload;
       (async () => {
-        // Find a tab in this group to determine windowId and position
-        const groupTabs = [];
-        for (const [, t] of state.tabs) {
-          if (t.groupId === newTabGid) groupTabs.push(t);
-        }
-        if (groupTabs.length > 0) {
-          const lastTab = groupTabs.reduce((a, b) => a.index > b.index ? a : b);
-          const newTab = await chrome.tabs.create({
-            windowId: lastTab.windowId,
-            index: lastTab.index + 1,
-          });
-          await chrome.tabs.group({ tabIds: [newTab.id], groupId: newTabGid }).catch(() => {});
-        } else {
-          const newTab = await chrome.tabs.create({});
-          await chrome.tabs.group({ tabIds: [newTab.id], groupId: newTabGid }).catch(() => {});
+        try {
+          // Find a tab in this group to determine windowId and position
+          const groupTabs = [];
+          for (const [, t] of state.tabs) {
+            if (t.groupId === newTabGid) groupTabs.push(t);
+          }
+          if (groupTabs.length > 0) {
+            const lastTab = groupTabs.reduce((a, b) => a.index > b.index ? a : b);
+            const newTab = await chrome.tabs.create({
+              windowId: lastTab.windowId,
+              index: lastTab.index + 1,
+            });
+            await chrome.tabs.group({ tabIds: [newTab.id], groupId: newTabGid }).catch(err => {
+              console.warn('[LinkMap] NEW_TAB_IN_GROUP group assign failed:', err);
+            });
+          } else {
+            const newTab = await chrome.tabs.create({});
+            await chrome.tabs.group({ tabIds: [newTab.id], groupId: newTabGid }).catch(err => {
+              console.warn('[LinkMap] NEW_TAB_IN_GROUP group assign failed:', err);
+            });
+          }
+        } catch (err) {
+          console.error('[LinkMap] NEW_TAB_IN_GROUP failed:', err);
         }
       })();
       break;
@@ -1242,19 +1511,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       state.updateGroup(toggleGid, { collapsed: newCollapsed });
       suppressGroupCollapseForBurst();
       chrome.tabGroups.update(toggleGid, { collapsed: newCollapsed }).catch(() => {});
-      saveState();
-      broadcastState();
+      commitState();
       break;
     }
 
     case MSG.RENAME_GROUP: {
       const { groupId: renameGid, title: newTitle } = payload;
       state.updateGroup(renameGid, { title: newTitle });
+      suppressGroupTitleForBurst();
       chrome.tabGroups.update(renameGid, { title: newTitle }).catch((err) => {
         console.error('[LinkMap] Group rename failed:', err);
       });
-      saveState();
-      broadcastState();
+      commitState();
       break;
     }
 
@@ -1286,8 +1554,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         chrome.tabGroups.move(groupId, { index: targetIndex }).catch(() => {});
       }
 
-      saveState();
-      broadcastState();
+      commitState();
       break;
     }
 
@@ -1315,8 +1582,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           // Reorder rootIds: move tab adjacent to its group members
           repositionTabToGroup(payload.tabId, resultGroupId);
-          saveState();
-          broadcastState();
+          commitState();
 
           sendResponse({ groupId: resultGroupId });
         } catch (err) {
@@ -1334,12 +1600,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
 
     case MSG.RELOAD_TAB:
-      chrome.tabs.reload(payload.tabId);
+      chrome.tabs.reload(payload.tabId).catch(() => {});
       break;
 
     case MSG.MOVE_TO_NEW_WINDOW:
-      chrome.windows.create({ tabId: payload.tabId });
+      chrome.windows.create({ tabId: payload.tabId }).catch(err => {
+        console.warn('[LinkMap] MOVE_TO_NEW_WINDOW failed:', err);
+      });
       break;
+
+    case MSG.RENAME_WINDOW: {
+      const { windowId, name } = payload;
+      state.setWindowName(windowId, name);
+      commitState();
+      break;
+    }
 
     case MSG.DISCARD_TABS:
       (async () => {
@@ -1382,7 +1657,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (dupes.length > 1) {
         dupes.sort((a, b) => a - b); // keep lowest ID
-        chrome.tabs.remove(dupes.slice(1));
+        chrome.tabs.remove(dupes.slice(1)).catch(() => {});
       }
       break;
     }
@@ -1399,6 +1674,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case MSG.RESTORE_SESSION: {
       restoreSession(payload.sessionId);
+      break;
+    }
+
+    case MSG.RESTORE_SESSION_WINDOW: {
+      const { sessionId, windowId } = payload;
+      restoreSession(sessionId, windowId);
       break;
     }
 
@@ -1507,6 +1788,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
     }
 
+    case MSG.UPDATE_WORKSPACE: {
+      const wsToUpdate = workspaces.find(w => w.id === payload.workspaceId);
+      if (wsToUpdate) {
+        if (payload.name) wsToUpdate.name = payload.name;
+        if (payload.color) wsToUpdate.color = payload.color;
+        saveWorkspaces();
+        broadcastState();
+      }
+      break;
+    }
+
     case MSG.GET_WORKSPACES: {
       sendResponse({ workspaces, activeWorkspaceId });
       break;
@@ -1551,7 +1843,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case MSG.MULTI_CLOSE: {
       if (payload.tabIds?.length > 0) {
-        chrome.tabs.remove(payload.tabIds);
+        chrome.tabs.remove(payload.tabIds).catch(() => {});
       }
       break;
     }
@@ -1613,8 +1905,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Sync Chrome tab strip order
       chrome.tabs.move(reorderTabId, { index: insertIdx }).catch(() => {});
 
-      saveState();
-      broadcastState();
+      commitState();
       break;
     }
 
@@ -1636,8 +1927,7 @@ function moveTabToGroup(tabId, targetGroupId) {
   chrome.tabs.group({ tabIds: [tabId], groupId: targetGroupId })
     .then(() => {
       repositionTabToGroup(tabId, targetGroupId);
-      saveState();
-      broadcastState();
+      commitState();
     })
     .catch((err) => {
       console.error('[LinkMap] Group add failed:', err);
@@ -1665,8 +1955,7 @@ function moveTabAsChild(tabId, parentId, needsWindowMove, targetWindowId) {
   if (needsWindowMove) {
     chrome.tabs.move(tabId, { windowId: targetWindowId, index: -1 }).then(() => {
       state.moveTab(tabId, parentId, 0);
-      saveState();
-      broadcastState();
+      commitState();
     }).catch((err) => {
       console.error('[LinkMap] Cross-window move failed:', err);
     });
@@ -1698,8 +1987,7 @@ function moveTabBeforeAfter(tabId, parentId, targetTabId, position, needsWindowM
   if (needsWindowMove) {
     chrome.tabs.move(tabId, { windowId: targetWindowId, index: -1 }).then(() => {
       state.moveTab(tabId, parentId, targetIndex);
-      saveState();
-      broadcastState();
+      commitState();
     }).catch((err) => {
       console.error('[LinkMap] Cross-window move failed:', err);
     });
@@ -1795,9 +2083,10 @@ async function openBookmarkFolder(folderId) {
  * Returns the index in rootIds just past the last pinned tab.
  * If no pinned tabs exist, returns 0.
  */
-function getPinnedBoundaryIndex() {
+function getPinnedBoundaryIndex(excludeTabId) {
   let lastPinned = -1;
   for (let i = 0; i < state.rootIds.length; i++) {
+    if (state.rootIds[i] === excludeTabId) continue;
     const tab = state.tabs.get(state.rootIds[i]);
     if (tab && tab.pinned) lastPinned = i;
   }
@@ -1879,7 +2168,7 @@ chrome.commands.onCommand.addListener((command) => {
     case 'focus-search':
       // Send message to side panel to focus search
       try {
-        chrome.runtime.sendMessage({ type: 'FOCUS_SEARCH' }).catch(() => {});
+        chrome.runtime.sendMessage({ type: MSG.FOCUS_SEARCH }).catch(() => {});
       } catch (_e) {}
       break;
     case 'close-current-tab':

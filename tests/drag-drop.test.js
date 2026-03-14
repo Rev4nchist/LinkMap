@@ -311,13 +311,12 @@ describe('MOVE_TAB reorder index calculation', () => {
     // parent 1 → child 2
 
     // Move tab 1 as child of tab 2 — this would create a cycle.
-    // ShadowState.moveTab does the move, but we should verify state integrity.
-    // The current implementation doesn't prevent cycles, so this test documents behavior.
+    // ShadowState.moveTab has cycle detection and silently aborts the move.
     state.moveTab(1, 2, 0);
 
-    // After move: tab 1 is child of tab 2, tab 2 is child of tab 1 → cycle
-    // This documents that cycle prevention needs to be added
-    assert.equal(state.getTab(1).parentId, 2);
-    assert.equal(state.getTab(2).parentId, 1);
+    // State should be unchanged — the move was rejected
+    assert.equal(state.getTab(1).parentId, null, 'tab 1 should remain a root');
+    assert.equal(state.getTab(2).parentId, 1, 'tab 2 should remain child of tab 1');
+    assert.deepEqual(state.rootIds, [1], 'rootIds should be unchanged');
   });
 });

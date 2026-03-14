@@ -7,7 +7,7 @@
 
 import { smartSearch, el, debounce } from '../../shared/utils.js';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
-import { DEFAULT_FAVICON } from './tree-renderer.js';
+import { DEFAULT_FAVICON } from '../../shared/constants.js';
 
 /**
  * Initialize search functionality.
@@ -20,9 +20,19 @@ import { DEFAULT_FAVICON } from './tree-renderer.js';
 export function initSearch(inputEl, treeContainer, getState, restoreTree) {
   let isSearching = false;
 
+  // Aria-live region for screen reader announcements
+  const liveRegion = document.createElement('div');
+  liveRegion.setAttribute('aria-live', 'polite');
+  liveRegion.setAttribute('aria-atomic', 'true');
+  liveRegion.className = 'sr-only';
+  if (inputEl.parentElement) {
+    inputEl.parentElement.appendChild(liveRegion);
+  }
+
   const doSearch = debounce((query) => {
     if (!query.trim()) {
       exitSearch();
+      liveRegion.textContent = '';
       return;
     }
 
@@ -32,6 +42,11 @@ export function initSearch(inputEl, treeContainer, getState, restoreTree) {
     isSearching = true;
     const results = searchTabs(state.tabs, query);
     renderSearchResults(results, treeContainer);
+
+    // Announce results to screen readers
+    liveRegion.textContent = results.length === 0
+      ? 'No matching tabs'
+      : `${results.length} tab${results.length === 1 ? '' : 's'} found`;
   }, SEARCH_DEBOUNCE_MS);
 
   inputEl.addEventListener('input', (e) => {

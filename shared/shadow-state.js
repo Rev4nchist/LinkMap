@@ -61,6 +61,9 @@ export class ShadowState {
 
     /** @type {string} Active theme name */
     this.theme = DEFAULT_THEME;
+
+    /** @type {Map<number, string>} windowId -> user-assigned name */
+    this.windowNames = new Map();
   }
 
   // -----------------------------------------------------------------------
@@ -268,6 +271,28 @@ export class ShadowState {
   }
 
   /**
+   * Sets or clears a user-assigned name for a window.
+   * @param {number} windowId
+   * @param {string|null} name
+   */
+  setWindowName(windowId, name) {
+    if (name && name.trim()) {
+      this.windowNames.set(windowId, name.trim());
+    } else {
+      this.windowNames.delete(windowId);
+    }
+  }
+
+  /**
+   * Gets the user-assigned name for a window, or null if none.
+   * @param {number} windowId
+   * @returns {string|null}
+   */
+  getWindowName(windowId) {
+    return this.windowNames.get(windowId) || null;
+  }
+
+  /**
    * Moves all root-level tabs belonging to a group as a block, positioning
    * them relative to an anchor tab.
    *
@@ -314,7 +339,7 @@ export class ShadowState {
   addGroup(group) {
     this.groups.set(group.id, {
       id: group.id,
-      title: group.title || '',
+      title: group.title ?? '',
       color: group.color || 'grey',
       collapsed: group.collapsed || false,
       windowId: group.windowId,
@@ -480,8 +505,9 @@ export class ShadowState {
       if (memberSet.has(id)) ordered.push(id);
     }
     // Append any nested members not in rootIds
+    const orderedSet = new Set(ordered);
     for (const id of memberSet) {
-      if (!ordered.includes(id)) ordered.push(id);
+      if (!orderedSet.has(id)) ordered.push(id);
     }
     return ordered;
   }
@@ -585,6 +611,7 @@ export class ShadowState {
       groups: Object.fromEntries(this.groups),
       groupColors: { ...this.groupColors },
       theme: this.theme,
+      windowNames: Object.fromEntries(this.windowNames),
     };
   }
 
@@ -617,8 +644,18 @@ export class ShadowState {
       }
     }
 
-    state.groupColors = data.groupColors ? { ...data.groupColors } : {};
+    if (data.groupColors) {
+      for (const [key, val] of Object.entries(data.groupColors)) {
+        state.groupColors[Number(key)] = val;
+      }
+    }
     state.theme = data.theme ?? DEFAULT_THEME;
+
+    if (data.windowNames) {
+      for (const [key, name] of Object.entries(data.windowNames)) {
+        state.windowNames.set(Number(key), name);
+      }
+    }
 
     return state;
   }
@@ -643,6 +680,12 @@ export class ShadowState {
   reconcileWithLiveTabs(liveTabs) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
     const matchedLiveIds = new Set();
+
+    // Snapshot saved windowIds BEFORE they get overwritten at the update pass
+    const savedTabWindowIds = new Map();
+    for (const [id, node] of this.tabs) {
+      savedTabWindowIds.set(id, node.windowId);
+    }
 
     // Pass 1: Match by tabId (same session)
     for (const id of this.tabs.keys()) {
@@ -776,6 +819,25 @@ export class ShadowState {
       }
     }
 
+    // Build oldWindowId → newWindowId map from matched tabs (for group rescue)
+    const windowIdVotes = new Map(); // oldWid → Map<newWid, count>
+    for (const liveTab of liveTabs) {
+      const savedWid = savedTabWindowIds.get(liveTab.id);
+      if (savedWid !== undefined && savedWid !== liveTab.windowId) {
+        if (!windowIdVotes.has(savedWid)) windowIdVotes.set(savedWid, new Map());
+        const votes = windowIdVotes.get(savedWid);
+        votes.set(liveTab.windowId, (votes.get(liveTab.windowId) || 0) + 1);
+      }
+    }
+    const windowIdMap = new Map();
+    for (const [oldWid, votes] of windowIdVotes) {
+      let bestWid = oldWid, bestCount = 0;
+      for (const [newWid, count] of votes) {
+        if (count > bestCount) { bestCount = count; bestWid = newWid; }
+      }
+      windowIdMap.set(oldWid, bestWid);
+    }
+
     // (b) Update existing / add new.
     for (const tab of liveTabs) {
       const changes = {
@@ -810,24 +872,100 @@ export class ShadowState {
       .sort((a, b) => (this.tabs.get(a)?.index ?? 0) - (this.tabs.get(b)?.index ?? 0));
     this.rootIds = [...preserved, ...newRoots];
     this.enforceGroupContiguity(); // Ensure group members are contiguous
+
+    // Remap window names to new windowIds
+    const remappedNames = new Map();
+    for (const [oldWid, name] of this.windowNames) {
+      const newWid = windowIdMap.get(oldWid) ?? oldWid;
+      remappedNames.set(newWid, name);
+    }
+    this.windowNames = remappedNames;
+
+    return windowIdMap;
   }
 
   /**
    * Synchronizes in-memory group state with live Chrome tab groups.
    *
    * @param {Object[]} liveGroups - Array from chrome.tabGroups.query({}).
+   * @param {Map<number, number>} savedGroupTabCounts - Tab counts per saved group ID,
+   *   snapshotted before reconcileWithLiveTabs() overwrites groupIds.
+   * @param {Map<number, number>} windowIdMap - Old windowId → new windowId mapping,
+   *   built by reconcileWithLiveTabs() from tab matching across restart.
    */
-  reconcileWithLiveGroups(liveGroups) {
+  reconcileWithLiveGroups(liveGroups, savedGroupTabCounts = new Map(), windowIdMap = new Map()) {
     const liveIds = new Set(liveGroups.map((g) => g.id));
+
+    // Compute tab counts per NEW group from reconciled tab state
+    const newGroupTabCounts = new Map();
+    for (const [, tab] of this.tabs) {
+      const gid = tab.groupId;
+      if (gid && gid !== -1) {
+        newGroupTabCounts.set(gid, (newGroupTabCounts.get(gid) || 0) + 1);
+      }
+    }
+
+    // Build rescue maps from orphaned groups (saved IDs not in live set).
+    // After a restart Chrome assigns new group AND window IDs. We translate
+    // the saved windowId → new windowId using the map built from tab matching.
+    // Three tiers: color:mappedWid:count (precise) → color:mappedWid → color-only (last resort).
+    const rescueByCount = new Map();      // "color:wid:count" → title
+    const rescueByColor = new Map();      // "color:wid" → title (first match only)
+    const rescueByColorOnly = new Map();  // "color" → title (last resort)
+    for (const [id, saved] of this.groups) {
+      if (!liveIds.has(id) && saved.title) {
+        const count = savedGroupTabCounts.get(id) || 0;
+        const mappedWid = windowIdMap.get(saved.windowId) ?? saved.windowId;
+        const countKey = `${saved.color}:${mappedWid}:${count}`;
+        if (!rescueByCount.has(countKey)) {
+          rescueByCount.set(countKey, saved.title);
+        }
+        const colorKey = `${saved.color}:${mappedWid}`;
+        if (!rescueByColor.has(colorKey)) {
+          rescueByColor.set(colorKey, saved.title);
+        }
+        if (!rescueByColorOnly.has(saved.color)) {
+          rescueByColorOnly.set(saved.color, saved.title);
+        }
+      }
+    }
 
     // Remove dead groups
     for (const id of this.groups.keys()) {
       if (!liveIds.has(id)) this.groups.delete(id);
     }
 
-    // Add/update live groups
+    // Add/update live groups — preserve saved title if Chrome has none
     for (const group of liveGroups) {
-      this.addGroup(group);
+      const existing = this.groups.get(group.id);
+      if (existing) {
+        existing.color = group.color || existing.color;
+        existing.collapsed = group.collapsed ?? existing.collapsed;
+        existing.windowId = group.windowId;
+        if (group.title) existing.title = group.title;
+      } else {
+        this.addGroup(group);
+        // Rescue title from orphaned group if Chrome returned empty
+        if (!group.title) {
+          const count = newGroupTabCounts.get(group.id) || 0;
+          const countKey = `${group.color}:${group.windowId}:${count}`;
+          let rescued = rescueByCount.get(countKey);
+          if (rescued) {
+            rescueByCount.delete(countKey);
+          } else {
+            const colorKey = `${group.color}:${group.windowId}`;
+            rescued = rescueByColor.get(colorKey);
+            if (rescued) rescueByColor.delete(colorKey);
+          }
+          if (!rescued) {
+            rescued = rescueByColorOnly.get(group.color);
+            if (rescued) rescueByColorOnly.delete(group.color);
+          }
+          if (rescued) {
+            this.groups.get(group.id).title = rescued;
+          }
+        }
+      }
     }
   }
 }

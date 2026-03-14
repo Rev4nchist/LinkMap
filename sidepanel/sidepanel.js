@@ -5,8 +5,8 @@
  * DOM building is delegated to tree-renderer.js.
  */
 
-import { MSG, THEME_ACCENTS, UNGROUPED_GROUP_ID } from '../shared/constants.js';
-import { escapeHtml, generateThemePalette } from '../shared/utils.js';
+import { MSG } from '../shared/constants.js';
+import { generateThemePalette } from '../shared/utils.js';
 import { renderTree } from './modules/tree-renderer.js';
 import { showContextMenu, showGroupContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
 import { initSearch } from './modules/search.js';
@@ -14,6 +14,9 @@ import { initDragDrop, initPinnedDragDrop } from './modules/drag-drop.js';
 import { undoCloseTab, toggleSessionManager, toggleRecentlyClosed, closeSessionManager, closeRecentlyClosed, setSessionState } from './modules/session-manager.js';
 import { toggleCommandPalette, setCommandPaletteState, closeCommandPalette } from './modules/command-palette.js';
 import { initWorkspaceUI, setWorkspaceState, getActiveWorkspaceTabIds } from './modules/workspace-ui.js';
+import { initKeyboardNav } from './modules/keyboard-nav.js';
+import { initSettings } from './modules/settings.js';
+import { initMultiSelect } from './modules/multi-select.js';
 
 
 // ---------------------------------------------------------------------------
@@ -46,6 +49,7 @@ let focusedTabId = null;
 let homeWindowId = null;
 let collapsedWindowIds = new Set();
 let selectedTabIds = new Set();
+let sidebarActivatedTabId = null; // suppress scroll when sidebar initiated the activation
 
 // Query the side panel's own window once at init (stable, never changes)
 const homeWindowReady = chrome.windows.getCurrent().then(win => { homeWindowId = win.id; });
@@ -56,6 +60,7 @@ const homeWindowReady = chrome.windows.getCurrent().then(win => { homeWindowId =
 
 initDragDrop(treeContainer);
 initPinnedDragDrop(pinnedList);
+initPinnedDragDrop(treeContainer); // inline pinned bars in multi-window mode
 
 
 // ---------------------------------------------------------------------------
@@ -118,16 +123,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG.TAB_ACTIVATED:
       currentActiveTabId = message.payload.tabId;
       render();
-      scrollToActiveTab(message.payload.tabId);
+      // Only scroll when activation came from outside the sidebar (e.g. Chrome tab bar)
+      if (sidebarActivatedTabId === message.payload.tabId) {
+        sidebarActivatedTabId = null;
+      } else {
+        scrollToActiveTab(message.payload.tabId);
+      }
       break;
     case MSG.THEME_CHANGED:
       document.documentElement.dataset.theme = message.payload.theme;
       if (themeSelect) themeSelect.value = message.payload.theme;
       break;
-    case 'CRASH_RECOVERY':
+    case MSG.CRASH_RECOVERY:
       showCrashRecoveryBanner(message.payload);
       break;
-    case 'FOCUS_SEARCH':
+    case MSG.FOCUS_SEARCH:
       searchInput.focus();
       searchInput.select();
       break;
@@ -280,6 +290,15 @@ treeContainer.addEventListener('click', (e) => {
     return;
   }
 
+  // Pinned tab click inside window pinned bar — activate tab
+  const pinnedTab = e.target.closest('.pinned-tab');
+  if (pinnedTab) {
+    const tabId = Number(pinnedTab.dataset.tabId);
+    sidebarActivatedTabId = tabId;
+    chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
+    return;
+  }
+
   const tabEntry = e.target.closest('.tab-entry');
   if (!tabEntry) return;
 
@@ -332,7 +351,8 @@ treeContainer.addEventListener('click', (e) => {
     updateMultiSelectUI();
   }
 
-  // Tab clicked — activate it
+  // Tab clicked — activate it (flag to suppress scroll-to-active since tab is already visible)
+  sidebarActivatedTabId = tabId;
   chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
 });
 
@@ -346,12 +366,76 @@ treeContainer.addEventListener('auxclick', (e) => {
   chrome.runtime.sendMessage({ type: MSG.CLOSE_TAB, payload: { tabId } }).catch(() => {});
 });
 
+// Double-click window separator to rename
+treeContainer.addEventListener('dblclick', (e) => {
+  const sep = e.target.closest('.window-separator');
+  if (!sep) return;
+  const wid = Number(sep.dataset.windowId);
+  if (!wid) return;
+
+  // Don't create input if already editing
+  const existingInput = sep.querySelector('input');
+  if (existingInput) return;
+
+  // Get current label text from text nodes
+  const textNodes = [...sep.childNodes].filter(n => n.nodeType === Node.TEXT_NODE);
+  const labelText = textNodes.map(n => n.textContent).join('').trim();
+
+  // Replace text with inline input
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = labelText;
+  input.className = 'window-rename-input';
+
+  // Remove text nodes
+  for (const tn of textNodes) tn.remove();
+  // Insert input after chevron if present, otherwise at start
+  const chevron = sep.querySelector('.window-chevron');
+  if (chevron) {
+    chevron.after(input);
+  } else {
+    sep.prepend(input);
+  }
+  input.focus();
+  input.select();
+
+  let done = false;
+  let cancelled = false;
+  function finish(save) {
+    if (done) return;
+    done = true;
+    const newName = save ? input.value.trim() : labelText;
+    if (save) {
+      chrome.runtime.sendMessage({
+        type: MSG.RENAME_WINDOW,
+        payload: { windowId: wid, name: newName },
+      }).catch(() => {});
+    }
+    // Restore text node and remove input immediately
+    const textNode = document.createTextNode(` ${newName} `);
+    input.replaceWith(textNode);
+  }
+
+  input.addEventListener('keydown', (ke) => {
+    if (ke.key === 'Enter') { finish(true); ke.preventDefault(); }
+    if (ke.key === 'Escape') { cancelled = true; input.blur(); }
+  });
+  input.addEventListener('blur', () => finish(!cancelled));
+});
+
 // Right-click context menu
 treeContainer.addEventListener('contextmenu', (e) => {
   const groupHeader = e.target.closest('.group-header');
   if (groupHeader) {
     e.preventDefault();
     showGroupContextMenu(Number(groupHeader.dataset.groupId), e.clientX, e.clientY);
+    return;
+  }
+  // Pinned tabs inside window pinned bars
+  const pinnedTab = e.target.closest('.pinned-tab');
+  if (pinnedTab) {
+    e.preventDefault();
+    showContextMenu(Number(pinnedTab.dataset.tabId), e.clientX, e.clientY);
     return;
   }
   const tabEntry = e.target.closest('.tab-entry');
@@ -369,6 +453,7 @@ pinnedList.addEventListener('click', (e) => {
   const pinnedTab = e.target.closest('.pinned-tab');
   if (!pinnedTab) return;
   const tabId = Number(pinnedTab.dataset.tabId);
+  sidebarActivatedTabId = tabId;
   chrome.runtime.sendMessage({ type: MSG.ACTIVATE_TAB, payload: { tabId } }).catch(() => {});
 });
 
@@ -452,322 +537,38 @@ if (addNewTabBtn) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard Navigation (Feature 4)
+// Keyboard Navigation (Feature 4) — delegated to keyboard-nav.js
 // ---------------------------------------------------------------------------
 
-document.addEventListener('keydown', (e) => {
-  // Skip when search input is focused (except Escape)
-  if (document.activeElement === searchInput && e.key !== 'Escape') return;
-
-  switch (e.key) {
-    case 'ArrowUp':
-      e.preventDefault();
-      moveFocus(-1);
-      break;
-
-    case 'ArrowDown':
-      e.preventDefault();
-      moveFocus(1);
-      break;
-
-    case 'Enter':
-      if (focusedTabId != null) {
-        e.preventDefault();
-        chrome.runtime.sendMessage({
-          type: MSG.ACTIVATE_TAB,
-          payload: { tabId: focusedTabId },
-        }).catch(() => {});
-      }
-      break;
-
-    case 'Delete':
-      if (focusedTabId != null) {
-        e.preventDefault();
-        chrome.runtime.sendMessage({
-          type: MSG.CLOSE_TAB,
-          payload: { tabId: focusedTabId },
-        }).catch(() => {});
-        focusedTabId = null;
-        updateFocusRing();
-      }
-      break;
-
-    case 'ArrowLeft':
-      if (focusedTabId != null) {
-        e.preventDefault();
-        const tabL = currentState?.tabs?.[focusedTabId];
-        if (tabL?.children?.length > 0) {
-          const isCollapsed = currentState.collapsed.includes(focusedTabId);
-          if (!isCollapsed) {
-            chrome.runtime.sendMessage({
-              type: MSG.TOGGLE_COLLAPSE,
-              payload: { tabId: focusedTabId },
-            }).catch(() => {});
-          }
-        }
-      }
-      break;
-
-    case 'ArrowRight':
-      if (focusedTabId != null) {
-        e.preventDefault();
-        const tabR = currentState?.tabs?.[focusedTabId];
-        if (tabR?.children?.length > 0) {
-          const isCollapsed = currentState.collapsed.includes(focusedTabId);
-          if (isCollapsed) {
-            chrome.runtime.sendMessage({
-              type: MSG.TOGGLE_COLLAPSE,
-              payload: { tabId: focusedTabId },
-            }).catch(() => {});
-          }
-        }
-      }
-      break;
-
-    case 'Home':
-      e.preventDefault();
-      focusFirst();
-      break;
-
-    case 'End':
-      e.preventDefault();
-      focusLast();
-      break;
-
-    case 'Escape':
-      if (document.activeElement === searchInput) return; // let search handle it
-      focusedTabId = null;
-      updateFocusRing();
-      break;
-  }
+const { updateFocusRing, getVisibleTabIds } = initKeyboardNav({
+  treeContainer,
+  searchInput,
+  getFocusedTabId: () => focusedTabId,
+  setFocusedTabId: (id) => { focusedTabId = id; },
+  getCurrentState: () => currentState,
 });
 
-/**
- * Returns visible tab IDs in DOM order from the tree container.
- */
-function getVisibleTabIds() {
-  const entries = treeContainer.querySelectorAll('.tab-entry[data-tab-id]');
-  return [...entries].map((el) => Number(el.dataset.tabId));
-}
-
-/**
- * Moves keyboard focus up or down.
- */
-function moveFocus(direction) {
-  const visibleIds = getVisibleTabIds();
-  if (visibleIds.length === 0) return;
-
-  if (focusedTabId == null) {
-    focusedTabId = visibleIds[direction > 0 ? 0 : visibleIds.length - 1];
-  } else {
-    const currentIdx = visibleIds.indexOf(focusedTabId);
-    if (currentIdx === -1) {
-      focusedTabId = visibleIds[0];
-    } else {
-      const nextIdx = Math.max(0, Math.min(visibleIds.length - 1, currentIdx + direction));
-      focusedTabId = visibleIds[nextIdx];
-    }
-  }
-  updateFocusRing();
-}
-
-function focusFirst() {
-  const visibleIds = getVisibleTabIds();
-  if (visibleIds.length > 0) {
-    focusedTabId = visibleIds[0];
-    updateFocusRing();
-  }
-}
-
-function focusLast() {
-  const visibleIds = getVisibleTabIds();
-  if (visibleIds.length > 0) {
-    focusedTabId = visibleIds[visibleIds.length - 1];
-    updateFocusRing();
-  }
-}
-
-/**
- * Updates the visual focus ring on the focused tab entry.
- */
-function updateFocusRing() {
-  // Clear all existing focus indicators
-  treeContainer.querySelectorAll('[data-focused]').forEach((el) => {
-    delete el.dataset.focused;
-  });
-
-  if (focusedTabId != null) {
-    const el = treeContainer.querySelector(`[data-tab-id="${focusedTabId}"]`);
-    if (el) {
-      el.dataset.focused = 'true';
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Settings Panel — Group Color Customization
+// Settings Panel — delegated to settings.js
 // ---------------------------------------------------------------------------
 
 const settingsBtn = document.getElementById('settings-btn');
-let settingsOpen = false;
-
-settingsBtn.addEventListener('click', () => {
-  settingsOpen = !settingsOpen;
-  if (settingsOpen) {
-    showSettings();
-  } else {
-    hideSettings();
-  }
+initSettings({
+  settingsBtn,
+  treeContainer,
+  getCurrentState: () => currentState,
+  generateThemePalette,
 });
 
-function showSettings() {
-  hideSettings(); // remove stale panel first
-
-  const panel = document.createElement('div');
-  panel.id = 'settings-panel';
-  panel.className = 'settings-panel';
-
-  if (!currentState) {
-    panel.innerHTML = `
-      <div class="settings-section">
-        <div class="settings-label">Settings</div>
-        <div class="settings-hint">Loading state...</div>
-      </div>
-    `;
-    treeContainer.before(panel);
-    return;
-  }
-
-  // Collect unique non-default groupIds from current tabs
-  const groups = new Set();
-  for (const tab of Object.values(currentState.tabs)) {
-    if (tab.groupId !== undefined && tab.groupId !== UNGROUPED_GROUP_ID) {
-      groups.add(tab.groupId);
-    }
-  }
-
-  if (groups.size === 0) {
-    panel.innerHTML = `
-      <div class="settings-section">
-        <div class="settings-label">Group Colors</div>
-        <div class="settings-hint">No tab groups found. Create tab groups in Chrome to customize their colors here.</div>
-      </div>
-    `;
-    treeContainer.before(panel);
-    return;
-  }
-
-  const themePalette = generateThemePalette(currentState.theme, THEME_ACCENTS);
-
-  let html = '<div class="settings-section"><div class="settings-label">Group Colors</div>';
-  for (const groupId of groups) {
-    const groupData = currentState.groups?.[groupId];
-    const groupName = groupData?.title || 'Untitled Group';
-    const currentColor = currentState.groupColors?.[groupId] || '#6c8cff';
-    const swatchesHtml = themePalette.map(hex =>
-      `<span class="settings-swatch" data-group-id="${groupId}" data-color="${hex}" style="background:${hex}" title="${hex}"></span>`
-    ).join('');
-    html += `
-      <div class="group-color-section">
-        <div class="group-color-row">
-          <span class="group-id-label">${escapeHtml(groupName)}</span>
-          <input type="color" class="group-color-input" data-group-id="${groupId}" value="${currentColor}">
-        </div>
-        <div class="settings-swatch-row">${swatchesHtml}</div>
-      </div>
-    `;
-  }
-  html += '</div>';
-  panel.innerHTML = html;
-
-  panel.addEventListener('input', (e) => {
-    if (!e.target.classList.contains('group-color-input')) return;
-    const groupId = Number(e.target.dataset.groupId);
-    const color = e.target.value;
-    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } }).catch(() => {});
-  });
-
-  panel.addEventListener('click', (e) => {
-    const swatch = e.target.closest('.settings-swatch');
-    if (!swatch) return;
-    const groupId = Number(swatch.dataset.groupId);
-    const color = swatch.dataset.color;
-    // Update the hex input to match
-    const input = panel.querySelector(`.group-color-input[data-group-id="${groupId}"]`);
-    if (input) input.value = color;
-    chrome.runtime.sendMessage({ type: MSG.SET_GROUP_COLOR, payload: { groupId, color } }).catch(() => {});
-  });
-
-  treeContainer.before(panel);
-}
-
-function hideSettings() {
-  const panel = document.getElementById('settings-panel');
-  if (panel) panel.remove();
-}
-
 // ---------------------------------------------------------------------------
-// Multi-Select UI
+// Multi-Select UI — delegated to multi-select.js
 // ---------------------------------------------------------------------------
 
-function updateMultiSelectUI() {
-  // Update data-selected attributes on tab entries
-  treeContainer.querySelectorAll('.tab-entry[data-tab-id]').forEach(el => {
-    const tabId = Number(el.dataset.tabId);
-    el.dataset.selected = String(selectedTabIds.has(tabId));
-  });
-
-  // Show/hide multi-select toolbar
-  let toolbar = document.getElementById('multi-select-toolbar');
-  if (selectedTabIds.size > 0) {
-    if (!toolbar) {
-      toolbar = document.createElement('div');
-      toolbar.id = 'multi-select-toolbar';
-      toolbar.className = 'multi-select-toolbar';
-      treeContainer.before(toolbar);
-    }
-    toolbar.innerHTML = `
-      <span class="ms-count">${selectedTabIds.size} selected</span>
-      <button data-action="close">Close</button>
-      <button data-action="group">Group</button>
-      <button data-action="sleep">Sleep</button>
-      <button data-action="copy">Copy URLs</button>
-      <button class="ms-clear" data-action="clear">&times;</button>
-    `;
-    toolbar.onclick = (e) => {
-      const btn = e.target.closest('button');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const ids = [...selectedTabIds];
-      switch (action) {
-        case 'close':
-          chrome.runtime.sendMessage({ type: MSG.MULTI_CLOSE, payload: { tabIds: ids } }).catch(() => {});
-          break;
-        case 'group':
-          chrome.runtime.sendMessage({ type: MSG.MULTI_GROUP, payload: { tabIds: ids } }).catch(() => {});
-          break;
-        case 'sleep':
-          chrome.runtime.sendMessage({ type: MSG.MULTI_SLEEP, payload: { tabIds: ids } }).catch(() => {});
-          break;
-        case 'copy': {
-          const urls = ids
-            .map(id => currentState?.tabs?.[id]?.url)
-            .filter(Boolean)
-            .join('\n');
-          navigator.clipboard.writeText(urls).catch(() => {});
-          break;
-        }
-        case 'clear':
-          break; // handled below
-      }
-      selectedTabIds.clear();
-      updateMultiSelectUI();
-    };
-  } else if (toolbar) {
-    toolbar.remove();
-  }
-}
+const { updateMultiSelectUI } = initMultiSelect({
+  treeContainer,
+  getSelectedTabIds: () => selectedTabIds,
+  getCurrentState: () => currentState,
+});
 
 // ---------------------------------------------------------------------------
 // Crash Recovery Banner

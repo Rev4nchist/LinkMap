@@ -25,6 +25,10 @@ function createChromeMock() {
 
   const storedData = {};
 
+  let nextTabId = 1000;
+  let nextWindowId = 100;
+  let nextGroupId = 500;
+
   return {
     tabs: {
       onCreated: makeEvent('tabs.onCreated'),
@@ -34,10 +38,33 @@ function createChromeMock() {
       onActivated: makeEvent('tabs.onActivated'),
       onAttached: makeEvent('tabs.onAttached'),
       onDetached: makeEvent('tabs.onDetached'),
+      onReplaced: makeEvent('tabs.onReplaced'),
       query: mock.fn(async () => []),
+      create: mock.fn(async (opts) => {
+        const id = nextTabId++;
+        return { id, ...opts };
+      }),
       update: mock.fn(async () => ({})),
       remove: mock.fn(async () => {}),
       duplicate: mock.fn(async () => ({})),
+      group: mock.fn(async () => nextGroupId++),
+    },
+    tabGroups: {
+      onCreated: makeEvent('tabGroups.onCreated'),
+      onRemoved: makeEvent('tabGroups.onRemoved'),
+      onUpdated: makeEvent('tabGroups.onUpdated'),
+      query: mock.fn(async () => []),
+      update: mock.fn(async () => ({})),
+    },
+    windows: {
+      onCreated: makeEvent('windows.onCreated'),
+      onRemoved: makeEvent('windows.onRemoved'),
+      onFocusChanged: makeEvent('windows.onFocusChanged'),
+      getCurrent: mock.fn(async () => ({ id: 1 })),
+      create: mock.fn(async () => {
+        const id = nextWindowId++;
+        return { id };
+      }),
     },
     storage: {
       local: {
@@ -55,13 +82,24 @@ function createChromeMock() {
     },
     runtime: {
       onMessage: makeEvent('runtime.onMessage'),
+      onSuspend: makeEvent('runtime.onSuspend'),
       sendMessage: mock.fn(async () => {}),
+    },
+    commands: {
+      onCommand: makeEvent('commands.onCommand'),
     },
     sidePanel: {
       setPanelBehavior: mock.fn(async () => {}),
     },
+    alarms: {
+      create: mock.fn(async () => {}),
+      onAlarm: makeEvent('alarms.onAlarm'),
+    },
     _listeners: listeners,
     _storedData: storedData,
+    _nextTabId: () => nextTabId,
+    _nextWindowId: () => nextWindowId,
+    _nextGroupId: () => nextGroupId,
   };
 }
 
@@ -1044,5 +1082,607 @@ describe('debounced persistence', () => {
     assert.ok(Array.isArray(savedState.collapsed), 'has collapsed array');
     assert.ok(typeof savedState.groupColors === 'object', 'has groupColors');
     assert.ok(typeof savedState.theme === 'string', 'has theme');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Track C — Multi-Window Session Restore
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: creates a saved session in chrome.storage.local and returns
+ * both the session ID and the listener function for message handling.
+ */
+async function setupSessionRestore(chromeMock, sessionData) {
+  // Pre-populate sessions in storage
+  chromeMock.storage.local._data.linkmap_sessions = [sessionData];
+
+  // Make the get mock return sessions too
+  const originalGet = chromeMock.storage.local.get;
+  chromeMock.storage.local.get = mock.fn(async (key) => {
+    if (typeof key === 'string') {
+      return { [key]: chromeMock.storage.local._data[key] ?? undefined };
+    }
+    return {};
+  });
+
+  // Set tabs.query to return some initial tabs + handle windowId queries
+  chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+    if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+    if (queryInfo && queryInfo.windowId != null) return [makeChromeTab({ id: 999 })];
+    return [makeChromeTab({ id: 1 })];
+  });
+
+  const { module } = await loadBackground(chromeMock);
+  await new Promise((r) => setTimeout(r, 100));
+
+  const listener = chromeMock._listeners['runtime.onMessage'][0];
+  return { listener };
+}
+
+/**
+ * Creates a session fixture with tabs across multiple windows.
+ */
+function makeMultiWindowSession(overrides = {}) {
+  return {
+    id: 'manual-test-session',
+    name: 'Multi-Window Test',
+    isAutoSave: false,
+    savedAt: Date.now(),
+    tabCount: 4,
+    data: {
+      version: 1,
+      tabs: {
+        10: { tabId: 10, parentId: null, children: [11], title: 'Win1 Tab A', url: 'https://a.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+        11: { tabId: 11, parentId: 10, children: [], title: 'Win1 Tab B', url: 'https://b.com', favIconUrl: '', pinned: true, audible: false, status: 'complete', groupId: -1, index: 1, windowId: 1 },
+        20: { tabId: 20, parentId: null, children: [21], title: 'Win2 Tab C', url: 'https://c.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 2 },
+        21: { tabId: 21, parentId: 20, children: [], title: 'Win2 Tab D', url: 'https://d.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 1, windowId: 2 },
+      },
+      rootIds: [10, 20],
+      collapsed: [],
+      groups: {},
+      groupColors: {},
+      theme: 'august-default',
+      windowNames: { 1: 'Research', 2: 'Dev' },
+    },
+    ...overrides,
+  };
+}
+
+describe('Track C: restoreSession multi-window support', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('creates separate Chrome windows for each saved windowId', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    // Wait for async restore to complete
+    await new Promise((r) => setTimeout(r, 500));
+
+    // First window is reused (getCurrent), so windows.create should be called once (for window 2)
+    assert.equal(
+      chromeMock.windows.create.mock.callCount(), 1,
+      'chrome.windows.create called once (for second window)'
+    );
+  });
+
+  it('passes correct windowId to chrome.tabs.create for each tab', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // All 4 tabs should have been created
+    const createCalls = chromeMock.tabs.create.mock.calls;
+    assert.equal(createCalls.length, 4, '4 tabs created');
+
+    // Extract windowIds from create calls
+    const windowIds = createCalls.map(c => c.arguments[0].windowId);
+
+    // First 2 tabs belong to saved windowId 1 -> mapped to currentWindow.id (1)
+    // Last 2 tabs belong to saved windowId 2 -> mapped to new window
+    const currentWindowId = 1; // from getCurrent mock
+    const win1Tabs = createCalls.filter(c => c.arguments[0].windowId === currentWindowId);
+    const win2Tabs = createCalls.filter(c => c.arguments[0].windowId !== currentWindowId);
+    assert.equal(win1Tabs.length, 2, '2 tabs in first (reused) window');
+    assert.equal(win2Tabs.length, 2, '2 tabs in second (new) window');
+  });
+
+  it('restores pinned state on tabs', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    const createCalls = chromeMock.tabs.create.mock.calls;
+    // Tab B (savedTab 11) was pinned
+    const pinnedCall = createCalls.find(c => c.arguments[0].url === 'https://b.com');
+    assert.ok(pinnedCall, 'Tab B create call found');
+    assert.equal(pinnedCall.arguments[0].pinned, true, 'Tab B created with pinned: true');
+
+    // Tab A (savedTab 10) was not pinned
+    const unpinnedCall = createCalls.find(c => c.arguments[0].url === 'https://a.com');
+    assert.ok(unpinnedCall, 'Tab A create call found');
+    assert.equal(unpinnedCall.arguments[0].pinned, false, 'Tab A created with pinned: false');
+  });
+
+  it('cleans up default newtab in newly created windows', async () => {
+    // When chrome.windows.create() is called, Chrome creates a default newtab.
+    // We need to track that the restore function closes these.
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      // When querying tabs in a newly created window, return a default tab
+      if (queryInfo && queryInfo.windowId != null && queryInfo.windowId !== 1) {
+        return [makeChromeTab({ id: 999, url: 'chrome://newtab', windowId: queryInfo.windowId })];
+      }
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    const session = makeMultiWindowSession();
+    chromeMock.storage.local._data.linkmap_sessions = [session];
+    chromeMock.storage.local.get = mock.fn(async (key) => {
+      if (typeof key === 'string') {
+        return { [key]: chromeMock.storage.local._data[key] ?? undefined };
+      }
+      return {};
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // chrome.tabs.remove should have been called to clean up default newtab (id 999)
+    const removeCalls = chromeMock.tabs.remove.mock.calls;
+    const cleanupCall = removeCalls.find(c => c.arguments[0] === 999);
+    assert.ok(cleanupCall, 'default newtab in new window was cleaned up');
+  });
+
+  it('applies saved window names to new windowIds', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Verify window names are in state via GET_STATE
+    let response = null;
+    listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // windowNames should exist on the state payload
+    assert.ok(response.windowNames, 'windowNames exists in state');
+
+    // The current window (id 1) should have the name from saved window 1
+    assert.equal(response.windowNames[1], 'Research', 'current window mapped to saved name "Research"');
+
+    // The newly created window should have the name from saved window 2
+    // The new window id comes from the mock (starts at 100)
+    assert.equal(response.windowNames[100], 'Dev', 'new window mapped to saved name "Dev"');
+  });
+
+  it('recreates tab groups in the correct window', async () => {
+    const session = makeMultiWindowSession();
+    // Add a group to saved window 2
+    session.data.tabs[20].groupId = 5;
+    session.data.tabs[21].groupId = 5;
+    session.data.groups = {
+      5: { id: 5, title: 'Dev Group', color: 'blue', collapsed: false, windowId: 2 },
+    };
+
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener(
+      { type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // chrome.tabs.group should have been called with the new IDs of tabs 20 and 21
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 1, 'tabs.group called once');
+
+    // chrome.tabGroups.update should have been called with title and color
+    const updateCall = chromeMock.tabGroups.update.mock.calls[0];
+    assert.ok(updateCall, 'tabGroups.update was called');
+    assert.equal(updateCall.arguments[1].title, 'Dev Group');
+    assert.equal(updateCall.arguments[1].color, 'blue');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Track C — restoreSession with windowIdFilter (single window)
+// ---------------------------------------------------------------------------
+
+describe('Track C: restoreSession with windowIdFilter', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('only restores tabs from the filtered windowId', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    // Restore only window 2
+    listener(
+      { type: 'RESTORE_SESSION_WINDOW', payload: { sessionId: 'manual-test-session', windowId: 2 } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Only 2 tabs from window 2 should be created
+    const createCalls = chromeMock.tabs.create.mock.calls;
+    assert.equal(createCalls.length, 2, 'only 2 tabs created (window 2 only)');
+
+    const urls = createCalls.map(c => c.arguments[0].url);
+    assert.ok(urls.includes('https://c.com'), 'Tab C restored');
+    assert.ok(urls.includes('https://d.com'), 'Tab D restored');
+    assert.ok(!urls.includes('https://a.com'), 'Tab A NOT restored');
+  });
+
+  it('does not create additional windows when restoring single window', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    // Restore only window 1 — should reuse current window
+    listener(
+      { type: 'RESTORE_SESSION_WINDOW', payload: { sessionId: 'manual-test-session', windowId: 1 } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // No new windows should be created for single-window restore
+    assert.equal(
+      chromeMock.windows.create.mock.callCount(), 0,
+      'no new windows created for single-window restore'
+    );
+  });
+
+  it('skips groups not belonging to the filtered window', async () => {
+    const session = makeMultiWindowSession();
+    // Group in window 1
+    session.data.tabs[10].groupId = 3;
+    session.data.tabs[11].groupId = 3;
+    session.data.groups = {
+      3: { id: 3, title: 'Research Group', color: 'green', collapsed: false, windowId: 1 },
+    };
+
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    // Restore only window 2 (which has no groups)
+    listener(
+      { type: 'RESTORE_SESSION_WINDOW', payload: { sessionId: 'manual-test-session', windowId: 2 } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // tabs.group should NOT be called (group belongs to window 1, not 2)
+    assert.equal(
+      chromeMock.tabs.group.mock.callCount(), 0,
+      'tabs.group not called when group belongs to different window'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Track C — saveSession includes window metadata
+// ---------------------------------------------------------------------------
+
+describe('Track C: saveSession window metadata', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('includes windowCount and windows breakdown in saved session', async () => {
+    // Set up with tabs in 2 windows
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true, windowId: 1 })];
+      return [
+        makeChromeTab({ id: 1, index: 0, windowId: 1 }),
+        makeChromeTab({ id: 2, index: 1, windowId: 1 }),
+        makeChromeTab({ id: 3, index: 0, windowId: 2 }),
+      ];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+
+    // Trigger manual save
+    listener(
+      { type: 'SAVE_SESSION', payload: { name: 'Test Save' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Read saved sessions from storage
+    const sessions = chromeMock.storage.local._data.linkmap_sessions;
+    assert.ok(sessions, 'sessions exist in storage');
+    assert.ok(sessions.length > 0, 'at least one session saved');
+
+    const saved = sessions[sessions.length - 1];
+    assert.equal(saved.windowCount, 2, 'windowCount is 2');
+    assert.ok(saved.windows, 'windows breakdown exists');
+    assert.ok(saved.windows[1], 'window 1 in breakdown');
+    assert.ok(saved.windows[2], 'window 2 in breakdown');
+    assert.equal(saved.windows[1].tabCount, 2, 'window 1 has 2 tabs');
+    assert.equal(saved.windows[2].tabCount, 1, 'window 2 has 1 tab');
+  });
+
+  it('includes window names in the breakdown', async () => {
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true, windowId: 1 })];
+      return [
+        makeChromeTab({ id: 1, index: 0, windowId: 1 }),
+        makeChromeTab({ id: 2, index: 0, windowId: 2 }),
+      ];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+
+    // First set a window name via RENAME_WINDOW
+    listener(
+      { type: 'RENAME_WINDOW', payload: { windowId: 1, name: 'Main' } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Save session
+    listener(
+      { type: 'SAVE_SESSION', payload: { name: 'Named Windows' } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 200));
+
+    const sessions = chromeMock.storage.local._data.linkmap_sessions;
+    const saved = sessions[sessions.length - 1];
+    assert.equal(saved.windows[1].name, 'Main', 'window 1 name is Main');
+    assert.equal(saved.windows[2].name, null, 'window 2 name is null (unnamed)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Track C — getSessions includes window metadata
+// ---------------------------------------------------------------------------
+
+describe('Track C: getSessions passes through window metadata', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('returns windowCount and windows in session listing', async () => {
+    const sessionWithMeta = {
+      id: 'manual-meta-test',
+      name: 'Meta Test',
+      isAutoSave: false,
+      savedAt: Date.now(),
+      tabCount: 3,
+      windowCount: 2,
+      windows: {
+        1: { tabCount: 2, name: 'Research' },
+        2: { tabCount: 1, name: null },
+      },
+      data: { version: 1, tabs: {}, rootIds: [], collapsed: [], groups: {}, groupColors: {}, theme: 'august-default', windowNames: {} },
+    };
+
+    chromeMock.storage.local._data.linkmap_sessions = [sessionWithMeta];
+    chromeMock.storage.local.get = mock.fn(async (key) => {
+      if (typeof key === 'string') {
+        return { [key]: chromeMock.storage.local._data[key] ?? undefined };
+      }
+      return {};
+    });
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+
+    let response = null;
+    listener(
+      { type: 'GET_SESSIONS' },
+      {},
+      (data) => { response = data; }
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    assert.ok(response, 'response received');
+    assert.ok(response.sessions, 'sessions in response');
+    const session = response.sessions.find(s => s.id === 'manual-meta-test');
+    assert.ok(session, 'session found in listing');
+    assert.equal(session.windowCount, 2, 'windowCount passed through');
+    assert.ok(session.windows, 'windows passed through');
+    assert.equal(session.windows[1].tabCount, 2, 'window 1 tabCount passed through');
+    assert.equal(session.windows[1].name, 'Research', 'window 1 name passed through');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Track C — RESTORE_SESSION_WINDOW message type
+// ---------------------------------------------------------------------------
+
+describe('Track C: RESTORE_SESSION_WINDOW message handler', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(async () => {
+    // Wait for any async activity (commitState/broadcastState) to settle
+    await new Promise((r) => setTimeout(r, 200));
+    delete globalThis.chrome;
+  });
+
+  it('handles RESTORE_SESSION_WINDOW message', async () => {
+    const session = makeMultiWindowSession();
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    // Send RESTORE_SESSION_WINDOW for window 1
+    listener(
+      { type: 'RESTORE_SESSION_WINDOW', payload: { sessionId: 'manual-test-session', windowId: 1 } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 800));
+
+    // Should only create tabs from window 1
+    const createCalls = chromeMock.tabs.create.mock.calls;
+    assert.equal(createCalls.length, 2, '2 tabs created for window 1');
+
+    const urls = createCalls.map(c => c.arguments[0].url);
+    assert.ok(urls.includes('https://a.com'), 'Tab A restored');
+    assert.ok(urls.includes('https://b.com'), 'Tab B restored');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Pinned tab boundary index (via onUpdated pin transition)
+// ---------------------------------------------------------------------------
+
+describe('pinned tab repositioning via onUpdated', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('positions newly pinned tab at the pinned zone boundary', async () => {
+    // Start with 3 tabs: tab 1 pinned, tabs 2 and 3 unpinned
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, pinned: true }),
+        makeChromeTab({ id: 2, index: 1, pinned: false }),
+        makeChromeTab({ id: 3, index: 2, pinned: false }),
+      ];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Pin tab 3 — it should move to the pinned zone, not stay at index 2
+    chromeMock.tabs.onUpdated._fire(3, { pinned: true }, makeChromeTab({ id: 3, pinned: true }));
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Verify via persisted state
+    const setCalls = chromeMock.storage.local.set.mock.calls;
+    const lastSetCall = setCalls[setCalls.length - 1];
+    const savedState = lastSetCall.arguments[0].linkmap_state;
+    assert.equal(savedState.tabs[3].pinned, true, 'tab 3 should be pinned');
+
+    // Tab 3 should be in rootIds near the pinned zone (index 0 or 1)
+    const tab3Idx = savedState.rootIds.indexOf(3);
+    assert.ok(tab3Idx <= 1, `pinned tab 3 should be in first 2 positions, got index ${tab3Idx}`);
+  });
+
+  it('moves unpinned tab out of pinned zone', async () => {
+    // Start with 2 pinned tabs and 1 unpinned
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, pinned: true }),
+        makeChromeTab({ id: 2, index: 1, pinned: true }),
+        makeChromeTab({ id: 3, index: 2, pinned: false }),
+      ];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Unpin tab 2
+    chromeMock.tabs.onUpdated._fire(2, { pinned: false }, makeChromeTab({ id: 2, pinned: false }));
+    await new Promise((r) => setTimeout(r, 600));
+
+    const setCalls = chromeMock.storage.local.set.mock.calls;
+    const lastSetCall = setCalls[setCalls.length - 1];
+    const savedState = lastSetCall.arguments[0].linkmap_state;
+    assert.equal(savedState.tabs[2].pinned, false, 'tab 2 should be unpinned');
+
+    // Tab 2 should be after all pinned tabs
+    const tab1Idx = savedState.rootIds.indexOf(1);
+    const tab2Idx = savedState.rootIds.indexOf(2);
+    assert.ok(tab2Idx > tab1Idx, `unpinned tab 2 (idx ${tab2Idx}) should be after pinned tab 1 (idx ${tab1Idx})`);
   });
 });

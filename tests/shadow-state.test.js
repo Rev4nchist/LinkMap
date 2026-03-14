@@ -70,9 +70,9 @@ describe('ShadowState constructor', () => {
     assert.deepEqual(s.groupColors, {});
   });
 
-  it('initializes with default theme "midnight"', () => {
+  it('initializes with default theme "august-default"', () => {
     const s = new ShadowState();
-    assert.equal(s.theme, 'midnight');
+    assert.equal(s.theme, 'august-default');
   });
 });
 
@@ -668,8 +668,8 @@ describe('reconcileWithLiveTabs', () => {
     ];
     s2.reconcileWithLiveTabs(liveTabs);
 
-    // rootIds should be ordered by index: 20 (idx 0), 30 (idx 1), 10 (idx 2)
-    assert.deepEqual(s2.rootIds, [20, 30, 10]);
+    // reconcileWithLiveTabs preserves existing rootIds order (tree order is source of truth)
+    assert.deepEqual(s2.rootIds, [10, 20, 30]);
   });
 
   it('handles empty liveTabs (removes all)', () => {
@@ -843,5 +843,159 @@ describe('ShadowState#enforceGroupContiguity', () => {
 
     // Stale id 999 is dropped, groups contiguous
     assert.deepEqual(s.rootIds, [1, 3, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Window Names (Track A)
+// ---------------------------------------------------------------------------
+
+describe('windowNames — constructor', () => {
+  it('initializes with empty windowNames Map', () => {
+    const s = new ShadowState();
+    assert.ok(s.windowNames instanceof Map);
+    assert.equal(s.windowNames.size, 0);
+  });
+});
+
+describe('setWindowName / getWindowName', () => {
+  let s;
+  beforeEach(() => { s = new ShadowState(); });
+
+  it('stores and retrieves a window name', () => {
+    s.setWindowName(1, 'Work');
+    assert.equal(s.getWindowName(1), 'Work');
+  });
+
+  it('trims whitespace from name', () => {
+    s.setWindowName(1, '  Work  ');
+    assert.equal(s.getWindowName(1), 'Work');
+  });
+
+  it('deletes name when set to empty string', () => {
+    s.setWindowName(1, 'Work');
+    s.setWindowName(1, '');
+    assert.equal(s.getWindowName(1), null);
+    assert.equal(s.windowNames.size, 0);
+  });
+
+  it('deletes name when set to whitespace-only', () => {
+    s.setWindowName(1, 'Work');
+    s.setWindowName(1, '   ');
+    assert.equal(s.getWindowName(1), null);
+  });
+
+  it('deletes name when set to null', () => {
+    s.setWindowName(1, 'Work');
+    s.setWindowName(1, null);
+    assert.equal(s.getWindowName(1), null);
+  });
+
+  it('returns null for unknown windowId', () => {
+    assert.equal(s.getWindowName(999), null);
+  });
+
+  it('supports multiple window names', () => {
+    s.setWindowName(1, 'Work');
+    s.setWindowName(2, 'Personal');
+    assert.equal(s.getWindowName(1), 'Work');
+    assert.equal(s.getWindowName(2), 'Personal');
+  });
+});
+
+describe('windowNames — serialization', () => {
+  it('toSerializable includes windowNames as plain object', () => {
+    const s = new ShadowState();
+    s.setWindowName(1, 'Work');
+    s.setWindowName(2, 'Personal');
+    const data = s.toSerializable();
+    assert.deepEqual(data.windowNames, { 1: 'Work', 2: 'Personal' });
+  });
+
+  it('toSerializable includes empty windowNames when none set', () => {
+    const s = new ShadowState();
+    const data = s.toSerializable();
+    assert.deepEqual(data.windowNames, {});
+  });
+
+  it('fromStorage restores windowNames from data', () => {
+    const s = new ShadowState();
+    s.setWindowName(1, 'Work');
+    s.setWindowName(2, 'Personal');
+    const data = s.toSerializable();
+    const restored = ShadowState.fromStorage(data);
+    assert.ok(restored.windowNames instanceof Map);
+    assert.equal(restored.getWindowName(1), 'Work');
+    assert.equal(restored.getWindowName(2), 'Personal');
+  });
+
+  it('fromStorage handles missing windowNames gracefully', () => {
+    const data = {
+      version: 1,
+      tabs: {},
+      rootIds: [],
+      collapsed: [],
+      groups: {},
+      groupColors: {},
+      theme: 'midnight',
+    };
+    const restored = ShadowState.fromStorage(data);
+    assert.ok(restored.windowNames instanceof Map);
+    assert.equal(restored.windowNames.size, 0);
+  });
+
+  it('fromStorage coerces string keys to numbers', () => {
+    const data = {
+      version: 1,
+      tabs: {},
+      rootIds: [],
+      collapsed: [],
+      groups: {},
+      groupColors: {},
+      theme: 'midnight',
+      windowNames: { '1': 'Work', '2': 'Personal' },
+    };
+    const restored = ShadowState.fromStorage(data);
+    assert.equal(restored.getWindowName(1), 'Work');
+    assert.equal(restored.getWindowName(2), 'Personal');
+  });
+});
+
+describe('windowNames — reconciliation remap', () => {
+  it('remaps window names when windowIds change during reconcile', () => {
+    const s = new ShadowState();
+    // Set up state with old window IDs (same tab IDs = Pass 1 match)
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100 }));
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200 }));
+    s.setWindowName(100, 'Work');
+    s.setWindowName(200, 'Personal');
+
+    // Live tabs have same IDs but new window IDs (simulating window re-assignment)
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 300, index: 0 }),
+      makeLiveTab({ id: 2, windowId: 400, index: 0 }),
+    ];
+
+    const windowIdMap = s.reconcileWithLiveTabs(liveTabs);
+    // windowIdMap should map 100->300, 200->400
+    // windowNames should now be keyed by new IDs
+    assert.equal(s.getWindowName(300), 'Work');
+    assert.equal(s.getWindowName(400), 'Personal');
+    // Old IDs should no longer exist
+    assert.equal(s.getWindowName(100), null);
+    assert.equal(s.getWindowName(200), null);
+  });
+
+  it('preserves window names when windowIds do not change', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100 }));
+    s.setWindowName(100, 'Work');
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(s.getWindowName(100), 'Work');
   });
 });

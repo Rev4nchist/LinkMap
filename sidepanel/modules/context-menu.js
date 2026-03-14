@@ -5,7 +5,7 @@
  * Menu items delegate to tab-actions.js for actual operations.
  */
 
-import { el, getDescendantIds, generateThemePalette, getGroupTabIds, getGroupDisplayOrder } from '../../shared/utils.js';
+import { el, getDescendantIds, generateThemePalette, getGroupTabIds, getGroupDisplayOrder, positionMenu, inlinePrompt } from '../../shared/utils.js';
 import { MSG, THEME_ACCENTS, UNGROUPED_GROUP_ID } from '../../shared/constants.js';
 import * as actions from './tab-actions.js';
 import { buildWorkspaceMenuItems } from './workspace-ui.js';
@@ -72,8 +72,10 @@ export function showContextMenu(tabId, x, y) {
 
   // Add Note
   const existingNote = currentState.tabNotes?.[tabId] || '';
-  items.push(menuItem(existingNote ? 'Edit Note' : 'Add Note', () => {
-    const note = prompt('Tab note:', existingNote);
+  items.push(menuItem(existingNote ? 'Edit Note' : 'Add Note', async () => {
+    const anchor = document.querySelector(`[data-tab-id="${tabId}"] .tab-title`);
+    if (!anchor) return;
+    const note = await inlinePrompt(anchor, 'Tab note', existingNote);
     if (note !== null) {
       chrome.runtime.sendMessage({
         type: MSG.SET_TAB_NOTE,
@@ -254,7 +256,9 @@ export function showGroupContextMenu(groupId, x, y) {
 
   // --- Save Group ---
   items.push(menuItem('Save Group', () => {
-    chrome.runtime.sendMessage({ type: MSG.SAVE_GROUP, payload: { groupId } });
+    chrome.runtime.sendMessage({ type: MSG.SAVE_GROUP, payload: { groupId } }).catch(err => {
+      console.warn('[LinkMap] SAVE_GROUP failed:', err);
+    });
   }));
 
   // --- Sleep All Tabs ---
@@ -290,6 +294,7 @@ function menuItem(label, onClick, danger = false) {
   const item = el('div', {
     className: `context-menu-item${danger ? ' danger' : ''}`
   }, label);
+  item.setAttribute('role', 'menuitem');
   item.addEventListener('click', () => {
     onClick();
     hideContextMenu();
@@ -298,21 +303,9 @@ function menuItem(label, onClick, danger = false) {
 }
 
 function separator() {
-  return el('div', { className: 'context-menu-separator' });
-}
-
-/**
- * Position a menu element within the viewport.
- * @param {HTMLElement} menu
- * @param {number} x — clientX
- * @param {number} y — clientY
- */
-function positionMenu(menu, x, y) {
-  const rect = menu.getBoundingClientRect();
-  const maxX = window.innerWidth - rect.width - 4;
-  const maxY = window.innerHeight - rect.height - 4;
-  menu.style.left = `${Math.min(x, maxX)}px`;
-  menu.style.top = `${Math.min(y, maxY)}px`;
+  const sep = el('div', { className: 'context-menu-separator' });
+  sep.setAttribute('role', 'separator');
+  return sep;
 }
 
 // ---------------------------------------------------------------------------

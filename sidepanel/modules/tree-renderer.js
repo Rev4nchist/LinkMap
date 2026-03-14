@@ -29,7 +29,7 @@ let _descendantCache = null;
  */
 export function renderTree(state, activeTabId, container, pinnedContainer, homeWindowId, collapsedWindowIds) {
   _descendantCache = new Map();
-  const { tabs, rootIds, collapsed, groupColors, groups, duplicates, visitFrequency, tabNotes } = state;
+  const { tabs, rootIds, collapsed, groupColors, groups, duplicates, visitFrequency, tabNotes, windowNames } = state;
   const duplicateTabIds = new Set();
   if (duplicates) {
     for (const ids of Object.values(duplicates)) {
@@ -47,18 +47,19 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
   }
 
   // Separate pinned from non-pinned tabs
-  const pinnedElements = [];
   const treeElements = [];
 
-  // Partition rootIds by windowId
-  const windowBuckets = new Map(); // windowId -> [rootId, ...]
-  const pinnedRootIds = [];
+  // Partition rootIds by windowId (both pinned and non-pinned)
+  const windowBuckets = new Map(); // windowId -> [rootId, ...] (non-pinned)
+  const pinnedByWindow = new Map(); // windowId -> [rootId, ...] (pinned)
 
   for (const rootId of rootIds) {
     const tab = tabs[rootId];
     if (!tab) continue;
     if (tab.pinned) {
-      pinnedRootIds.push(rootId);
+      const wid = tab.windowId ?? 0;
+      if (!pinnedByWindow.has(wid)) pinnedByWindow.set(wid, []);
+      pinnedByWindow.get(wid).push(rootId);
       continue;
     }
     const wid = tab.windowId ?? 0;
@@ -66,48 +67,62 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
     windowBuckets.get(wid).push(rootId);
   }
 
-  // Render pinned tabs
-  for (const rootId of pinnedRootIds) {
-    const tab = tabs[rootId];
-    pinnedElements.push(buildPinnedTab(tab));
-    // Pinned tab's non-pinned children still render in the tree
-    if (tab.children && tab.children.length > 0) {
-      for (const childId of tab.children) {
-        const child = tabs[childId];
-        if (!child || child.pinned) continue;
-        renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+  // Render pinned tab children into the tree (they are non-pinned children of pinned parents)
+  for (const pinnedIds of pinnedByWindow.values()) {
+    for (const rootId of pinnedIds) {
+      const tab = tabs[rootId];
+      if (tab.children && tab.children.length > 0) {
+        for (const childId of tab.children) {
+          const child = tabs[childId];
+          if (!child || child.pinned) continue;
+          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+        }
       }
     }
   }
 
   // Sort windows: home window first (stable), then by windowId
-  const sortedWindowIds = [...windowBuckets.keys()].sort((a, b) => {
+  // Include windows that only have pinned tabs (no non-pinned roots)
+  const allWindowIds = new Set([...windowBuckets.keys(), ...pinnedByWindow.keys()]);
+  const sortedWindowIds = [...allWindowIds].sort((a, b) => {
     if (a === homeWindowId) return -1;
     if (b === homeWindowId) return 1;
     return a - b;
   });
 
   // Labels from render order: non-home windows numbered sequentially
+  // Use user-assigned windowNames when available, fallback to "Window N"
   const windowLabels = new Map();
   let windowNum = 1;
   for (const wid of sortedWindowIds) {
-    if (wid !== homeWindowId) windowLabels.set(wid, `Window ${windowNum++}`);
+    if (wid !== homeWindowId) {
+      const userName = windowNames && windowNames[wid];
+      windowLabels.set(wid, userName || `Window ${windowNum}`);
+      windowNum++;
+    }
   }
 
   // Render each window's tabs with separator headers
   for (const wid of sortedWindowIds) {
-    const windowRootIds = windowBuckets.get(wid);
+    const windowRootIds = windowBuckets.get(wid) || [];
 
     // Insert window separator (skip for single window)
     if (sortedWindowIds.length > 1) {
       const isHome = wid === homeWindowId;
-      const label = isHome ? 'This Window' : windowLabels.get(wid);
+      const homeLabel = windowNames && windowNames[homeWindowId];
+      const label = isHome ? (homeLabel || 'This Window') : windowLabels.get(wid);
       const isCollapsible = !isHome;
       const isCollapsed = collapsedWindowIds && collapsedWindowIds.has(wid);
       treeElements.push(buildWindowSeparator(label, isCollapsible, isCollapsed, wid));
 
       // Skip tabs for collapsed non-home windows
       if (isCollapsed) continue;
+
+      // Per-window pinned tabs (only in multi-window mode)
+      const windowPinned = pinnedByWindow.get(wid) || [];
+      if (windowPinned.length > 0) {
+        treeElements.push(buildPinnedBar(windowPinned, tabs, wid));
+      }
     }
 
     // Pre-compute group member counts for this window
@@ -153,7 +168,20 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
   // Swap DOM content — keyed reconciliation preserves scroll + DOM state
   const scrollTop = container.scrollTop;
 
-  pinnedContainer.replaceChildren(...pinnedElements);
+  // Populate global pinned bar only for single-window mode;
+  // in multi-window mode, pinned tabs render inline within each window section.
+  if (sortedWindowIds.length <= 1) {
+    const pinnedElements = [];
+    for (const ids of pinnedByWindow.values()) {
+      for (const id of ids) {
+        const tab = tabs[id];
+        if (tab) pinnedElements.push(buildPinnedTab(tab));
+      }
+    }
+    pinnedContainer.replaceChildren(...pinnedElements);
+  } else {
+    pinnedContainer.replaceChildren(); // clear global bar in multi-window mode
+  }
   reconcileChildren(container, treeElements);
 
   container.scrollTop = scrollTop;
@@ -208,12 +236,16 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
   const freq = visitFrequency?.[tab.tabId];
 
   // Chevron or spacer
-  const chevronOrSpacer = hasChildren
-    ? el('span', {
-        className: 'tab-chevron',
-        dataset: { collapsed: String(isCollapsed) },
-      }, '\u25B6')
-    : el('div', { className: 'tab-chevron-spacer', style: 'width:16px' });
+  let chevronOrSpacer;
+  if (hasChildren) {
+    chevronOrSpacer = el('span', {
+      className: 'tab-chevron',
+      dataset: { collapsed: String(isCollapsed) },
+    }, '\u25B6');
+    chevronOrSpacer.setAttribute('aria-expanded', String(!isCollapsed));
+  } else {
+    chevronOrSpacer = el('div', { className: 'tab-chevron-spacer' });
+  }
 
   // Favicon
   const faviconSrc = tab.favIconUrl || DEFAULT_FAVICON;
@@ -296,6 +328,11 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
       windowId: String(tab.windowId ?? 0),
     },
   }, ...children);
+  entry.setAttribute('role', 'treeitem');
+  entry.setAttribute('tabindex', '-1');
+  if (isActive) {
+    entry.setAttribute('aria-current', 'page');
+  }
 
   // Tab note subtitle
   const noteText = tabNotes?.[tab.tabId];
@@ -340,6 +377,22 @@ function buildPinnedTab(tab) {
   }, favicon);
 }
 
+/**
+ * Builds an inline pinned tab bar for a window section (multi-window mode).
+ *
+ * @param {number[]} pinnedIds - Root IDs of pinned tabs for this window
+ * @param {Object} tabs - All tabs map
+ * @returns {HTMLElement}
+ */
+function buildPinnedBar(pinnedIds, tabs, windowId) {
+  const bar = el('div', { className: 'window-pinned-bar', dataset: { windowId: `pinned-${windowId}` } });
+  for (const id of pinnedIds) {
+    const tab = tabs[id];
+    if (tab) bar.appendChild(buildPinnedTab(tab));
+  }
+  return bar;
+}
+
 // ---------------------------------------------------------------------------
 // Group Header
 // ---------------------------------------------------------------------------
@@ -361,9 +414,6 @@ function buildGroupHeader(groupId, group, resolvedColor, memberCount) {
     dataset: { collapsed: String(isCollapsed) },
   }, '\u25B6');
 
-  const swatch = el('span', { className: 'group-color-swatch' });
-  swatch.style.backgroundColor = resolvedColor;
-
   const title = el('span', { className: 'group-title' },
     group?.title || 'Group');
 
@@ -373,7 +423,7 @@ function buildGroupHeader(groupId, group, resolvedColor, memberCount) {
     className: 'group-header',
     draggable: 'true',
     dataset: { groupId: String(groupId) },
-  }, chevron, swatch, title, count);
+  }, chevron, title, count);
 
   // Tint the header background with the group color
   header.style.borderLeft = `3px solid ${resolvedColor}`;
@@ -432,6 +482,21 @@ export function getElementKey(el) {
  * avoiding full replacement. Only touches attributes that differ.
  */
 export function patchElement(existing, incoming) {
+  // Window pinned bar: replace children entirely (pinned tab tiles change on pin/unpin/close)
+  if (existing.className && existing.className.includes('window-pinned-bar')) {
+    if (existing.className !== incoming.className) {
+      existing.className = incoming.className;
+    }
+    for (const key of Object.keys(incoming.dataset)) {
+      if (existing.dataset[key] !== incoming.dataset[key]) {
+        existing.dataset[key] = incoming.dataset[key];
+      }
+    }
+    const newChildren = [...incoming.children];
+    existing.replaceChildren(...newChildren);
+    return;
+  }
+
   // className
   if (existing.className !== incoming.className) {
     existing.className = incoming.className;
@@ -463,6 +528,14 @@ export function patchElement(existing, incoming) {
     existingFav.setAttribute('src', incomingFav.src);
   }
 
+  // Badge and note reconciliation — if child count changed (badge added/removed,
+  // note subtitle added/removed), fall back to full child replacement to avoid stale DOM.
+  if (existing.children.length !== incoming.children.length) {
+    const newChildren = [...incoming.children];
+    existing.replaceChildren(...newChildren);
+    return;
+  }
+
   // Group-specific patches
   const existingGroupTitle = existing.querySelector?.('.group-title');
   const incomingGroupTitle = incoming.querySelector?.('.group-title');
@@ -480,8 +553,28 @@ export function patchElement(existing, incoming) {
   for (const cls of ['.tab-chevron', '.group-chevron', '.window-chevron']) {
     const existingChevron = existing.querySelector?.(cls);
     const incomingChevron = incoming.querySelector?.(cls);
-    if (existingChevron && incomingChevron && existingChevron.dataset.collapsed !== incomingChevron.dataset.collapsed) {
-      existingChevron.dataset.collapsed = incomingChevron.dataset.collapsed;
+    if (existingChevron && incomingChevron) {
+      if (existingChevron.dataset.collapsed !== incomingChevron.dataset.collapsed) {
+        existingChevron.dataset.collapsed = incomingChevron.dataset.collapsed;
+      }
+      // Sync aria-expanded on chevrons
+      const incomingExpanded = incomingChevron.getAttribute?.('aria-expanded');
+      if (incomingExpanded != null && existingChevron.getAttribute?.('aria-expanded') !== incomingExpanded) {
+        existingChevron.setAttribute('aria-expanded', incomingExpanded);
+      }
+    }
+  }
+
+  // Sync aria-current on tab entries (active tab indicator)
+  const incomingCurrent = incoming.getAttribute?.('aria-current');
+  const existingCurrent = existing.getAttribute?.('aria-current');
+  if (incomingCurrent !== existingCurrent) {
+    if (incomingCurrent) {
+      existing.setAttribute('aria-current', incomingCurrent);
+    } else if (existingCurrent) {
+      existing.setAttribute('aria-current', '');
+      // Remove the attribute entirely if incoming doesn't have it
+      if (existing.attributes) delete existing.attributes['aria-current'];
     }
   }
 }

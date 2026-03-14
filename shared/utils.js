@@ -223,6 +223,20 @@ export function escapeHtml(str) {
 }
 
 /**
+ * Position a floating menu within the viewport bounds.
+ * @param {HTMLElement} menuEl - The menu element (must be in the DOM)
+ * @param {number} x - clientX position
+ * @param {number} y - clientY position
+ */
+export function positionMenu(menuEl, x, y) {
+  const rect = menuEl.getBoundingClientRect();
+  const maxX = window.innerWidth - rect.width - 4;
+  const maxY = window.innerHeight - rect.height - 4;
+  menuEl.style.left = `${Math.min(x, maxX)}px`;
+  menuEl.style.top = `${Math.min(y, maxY)}px`;
+}
+
+/**
  * Converts a hex color to HSL [h, s, l] (degrees, %, %).
  * @param {string} hex
  * @returns {number[]}
@@ -314,4 +328,57 @@ export function el(tag, attrs = {}, ...children) {
     }
   }
   return element;
+}
+
+/**
+ * Extracts the hostname from a URL string.
+ * @param {string} url
+ * @returns {string} hostname or the original string on failure
+ */
+export function extractDomain(url) {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
+/**
+ * Shows an inline text input near an anchor element.
+ * Resolves with the entered text on Enter, or null on Escape/blur.
+ * @param {HTMLElement} anchorEl - Element to position near
+ * @param {string} [placeholder=''] - Placeholder text
+ * @param {string} [defaultValue=''] - Pre-filled value
+ * @returns {Promise<string|null>}
+ */
+export function inlinePrompt(anchorEl, placeholder = '', defaultValue = '') {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'inline-prompt-input';
+    input.placeholder = placeholder;
+    input.value = defaultValue;
+
+    // Position after anchor
+    anchorEl.after(input);
+    input.focus();
+    input.select();
+
+    let resolved = false;
+    function finish(value) {
+      if (resolved) return;
+      resolved = true;
+      input.remove();
+      resolve(value);
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = input.value.trim();
+        finish(val || null);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      }
+    });
+
+    input.addEventListener('blur', () => finish(null));
+  });
 }

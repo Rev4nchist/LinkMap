@@ -6,7 +6,7 @@
  */
 
 import { MSG } from '../../shared/constants.js';
-import { smartSearch, escapeHtml } from '../../shared/utils.js';
+import { smartSearch, escapeHtml, extractDomain, inlinePrompt } from '../../shared/utils.js';
 
 let overlayEl = null;
 let stateRef = null;
@@ -113,8 +113,10 @@ const ACTIONS = [
   { type: 'action', label: 'Collapse All', icon: '−', action: () => chrome.runtime.sendMessage({ type: MSG.COLLAPSE_ALL }).catch(() => {}) },
   { type: 'action', label: 'Expand All', icon: '+', action: () => chrome.runtime.sendMessage({ type: MSG.EXPAND_ALL }).catch(() => {}) },
   { type: 'action', label: 'Close Duplicates', icon: '×', action: () => closeAllDuplicates() },
-  { type: 'action', label: 'Save Session', icon: '💾', action: () => {
-    const name = prompt('Session name:', `Session ${new Date().toLocaleDateString()}`);
+  { type: 'action', label: 'Save Session', icon: '💾', action: async () => {
+    const anchor = document.getElementById('sessions-btn') || document.querySelector('footer');
+    if (!anchor) return;
+    const name = await inlinePrompt(anchor, 'Session name', `Session ${new Date().toLocaleDateString()}`);
     if (name) chrome.runtime.sendMessage({ type: MSG.SAVE_SESSION, payload: { name, isAutoSave: false } }).catch(() => {});
   }},
   { type: 'action', label: 'Undo Close Tab', icon: '↩', action: () => chrome.runtime.sendMessage({ type: MSG.UNDO_CLOSE }).catch(() => {}) },
@@ -250,7 +252,3 @@ function closeAllDuplicates() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function extractDomain(url) {
-  try { return new URL(url).hostname; } catch { return url; }
-}

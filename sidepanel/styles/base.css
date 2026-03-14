@@ -210,3 +210,37 @@ footer {
 }
 
 /* (styles consolidated into .icon-button base above) */
+
+/* Inline prompt input (replaces native prompt() dialogs) */
+.inline-prompt-input {
+  background: var(--bg-secondary, #1e1e2e);
+  color: var(--text-primary, #cdd6f4);
+  border: 1px solid var(--border-color, #45475a);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  width: 100%;
+  max-width: 200px;
+  box-sizing: border-box;
+}
+/* Shared focus style for text inputs */
+.inline-prompt-input:focus,
+.context-menu-rename-input:focus,
+.window-rename-input:focus,
+#search-input:focus {
+  border-color: var(--accent, #c084fc);
+}
+
+/* Screen reader only — visually hidden but announced */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

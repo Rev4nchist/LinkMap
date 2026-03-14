@@ -8,7 +8,7 @@
  */
 
 import { MSG } from '../../shared/constants.js';
-import { escapeHtml } from '../../shared/utils.js';
+import { escapeHtml, extractDomain, inlinePrompt } from '../../shared/utils.js';
 
 // ---------------------------------------------------------------------------
 // DOM references (created dynamically)
@@ -94,16 +94,31 @@ function handleSessionClick(e) {
   }
 
   // Save button
-  if (e.target.closest('.session-save-btn')) {
-    const name = prompt('Session name:', `Session ${new Date().toLocaleDateString()}`);
-    if (name) {
-      chrome.runtime.sendMessage({
-        type: MSG.SAVE_SESSION,
-        payload: { name, isAutoSave: false },
-      }).catch(() => {});
-      // Refresh list after save
-      setTimeout(loadSessions, 300);
-    }
+  const saveBtn = e.target.closest('.session-save-btn');
+  if (saveBtn) {
+    (async () => {
+      const name = await inlinePrompt(saveBtn, 'Session name', `Session ${new Date().toLocaleDateString()}`);
+      if (name) {
+        chrome.runtime.sendMessage({
+          type: MSG.SAVE_SESSION,
+          payload: { name, isAutoSave: false },
+        }).catch(() => {});
+        // Refresh list after save
+        setTimeout(loadSessions, 300);
+      }
+    })();
+    return;
+  }
+
+  // Per-window restore button (must be before full-session restore)
+  const windowRestoreBtn = e.target.closest('.session-window-restore-btn');
+  if (windowRestoreBtn) {
+    const id = windowRestoreBtn.dataset.sessionId;
+    const windowId = Number(windowRestoreBtn.dataset.windowId);
+    chrome.runtime.sendMessage({
+      type: MSG.RESTORE_SESSION_WINDOW,
+      payload: { sessionId: id, windowId },
+    }).catch(() => {});
     return;
   }
 
@@ -178,12 +193,40 @@ function sessionEntryHtml(session) {
   });
   const tabCount = session.tabCount || 0;
   const name = escapeHtml(session.name || 'Untitled');
+  const windowCount = session.windowCount || 1;
+
+  // Build meta text with window info
+  let metaText = `${tabCount} tabs`;
+  if (windowCount > 1) {
+    metaText = `${windowCount} windows \u00b7 ${tabCount} tabs`;
+  }
+
+  // Build expandable window list for multi-window sessions
+  let windowListHtml = '';
+  if (session.windows && windowCount > 1) {
+    const windowEntries = Object.entries(session.windows);
+    windowListHtml = '<div class="session-windows">';
+    for (const [wid, info] of windowEntries) {
+      const wName = escapeHtml(info.name || 'Window');
+      windowListHtml += `
+        <div class="session-window-entry">
+          <span class="session-window-name">${wName}</span>
+          <span class="session-window-meta">${Number(info.tabCount) || 0} tabs</span>
+          <button class="session-window-restore-btn" data-session-id="${escapeHtml(session.id)}" data-window-id="${wid}" title="Restore this window">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2 6h8M6 2l4 4-4 4"/>
+            </svg>
+          </button>
+        </div>`;
+    }
+    windowListHtml += '</div>';
+  }
 
   return `
     <div class="session-entry" data-session-id="${escapeHtml(session.id)}">
       <div class="session-info">
         <span class="session-name">${name}</span>
-        <span class="session-meta">${tabCount} tabs &middot; ${timeStr}</span>
+        <span class="session-meta">${metaText} \u00b7 ${timeStr}</span>
       </div>
       <div class="session-entry-actions">
         <button class="session-restore-btn" data-session-id="${escapeHtml(session.id)}" title="Restore">
@@ -197,8 +240,8 @@ function sessionEntryHtml(session) {
           </svg>
         </button>
       </div>
-    </div>
-  `;
+      ${windowListHtml}
+    </div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,11 +352,3 @@ function renderRecentlyClosed(entries) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function extractDomain(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}

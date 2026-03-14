@@ -479,20 +479,23 @@ let pinnedDropIndicator = null;
 
 /**
  * Initialize drag-and-drop reordering for pinned tab tiles.
- * Separate from tree drag — no cross-section support.
- * @param {HTMLElement} pinnedContainer -- #pinned-list
+ * Can be called on multiple containers (e.g. #pinned-list AND #tree-container
+ * for inline pinned bars in multi-window mode). The drop indicator is shared.
+ * @param {HTMLElement} container - element whose descendants include .pinned-tab tiles
  */
-export function initPinnedDragDrop(pinnedContainer) {
-  pinnedDropIndicator = document.createElement('div');
-  pinnedDropIndicator.className = 'pinned-drop-indicator';
-  pinnedDropIndicator.hidden = true;
-  document.body.appendChild(pinnedDropIndicator);
+export function initPinnedDragDrop(container) {
+  if (!pinnedDropIndicator) {
+    pinnedDropIndicator = document.createElement('div');
+    pinnedDropIndicator.className = 'pinned-drop-indicator';
+    pinnedDropIndicator.hidden = true;
+    document.body.appendChild(pinnedDropIndicator);
+  }
 
-  pinnedContainer.addEventListener('dragstart', onPinnedDragStart);
-  pinnedContainer.addEventListener('dragover', onPinnedDragOver);
-  pinnedContainer.addEventListener('dragleave', onPinnedDragLeave);
-  pinnedContainer.addEventListener('drop', onPinnedDrop);
-  pinnedContainer.addEventListener('dragend', onPinnedDragEnd);
+  container.addEventListener('dragstart', onPinnedDragStart);
+  container.addEventListener('dragover', onPinnedDragOver);
+  container.addEventListener('dragleave', onPinnedDragLeave);
+  container.addEventListener('drop', onPinnedDrop);
+  container.addEventListener('dragend', onPinnedDragEnd);
 }
 
 function onPinnedDragStart(e) {

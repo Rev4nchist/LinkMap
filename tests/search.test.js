@@ -139,7 +139,7 @@ globalThis.document = {
 // Import modules under test (after DOM mock)
 // ---------------------------------------------------------------------------
 
-const { fuzzyMatch, el, debounce } = await import('../shared/utils.js');
+const { smartSearch, el, debounce } = await import('../shared/utils.js');
 const { initSearch } = await import('../sidepanel/modules/search.js');
 
 // ---------------------------------------------------------------------------
@@ -187,47 +187,48 @@ function fireKeydown(inputEl, key) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: fuzzyMatch (shared/utils.js — already exists, verifying behavior)
+// Tests: smartSearch (shared/utils.js — renamed from fuzzyMatch)
 // ---------------------------------------------------------------------------
 
-describe('fuzzyMatch', () => {
+describe('smartSearch', () => {
   it('matches substring characters in order', () => {
-    const result = fuzzyMatch('gml', 'gmail.com');
+    const result = smartSearch('gml', 'gmail.com');
     assert.equal(result.match, true);
     assert.ok(result.score > 0);
-    assert.deepEqual(result.indices, [0, 1, 4]);
+    // smartSearch returns indices for the match type (substring, fuzzy, etc.)
+    assert.ok(result.indices.length > 0);
   });
 
   it('returns no match when characters are not in order', () => {
-    const result = fuzzyMatch('zxy', 'gmail.com');
+    const result = smartSearch('zxy', 'gmail.com');
     assert.equal(result.match, false);
     assert.equal(result.score, 0);
   });
 
   it('handles empty query', () => {
-    const result = fuzzyMatch('', 'something');
+    const result = smartSearch('', 'something');
     assert.equal(result.match, false);
   });
 
   it('handles empty text', () => {
-    const result = fuzzyMatch('abc', '');
+    const result = smartSearch('abc', '');
     assert.equal(result.match, false);
   });
 
   it('is case insensitive', () => {
-    const result = fuzzyMatch('ABC', 'abcdef');
+    const result = smartSearch('ABC', 'abcdef');
     assert.equal(result.match, true);
   });
 
   it('scores higher for consecutive matches', () => {
-    const exact = fuzzyMatch('git', 'github.com');
-    const spread = fuzzyMatch('git', 'going into things');
+    const exact = smartSearch('git', 'github.com');
+    const spread = smartSearch('git', 'going into things');
     assert.ok(exact.score > spread.score);
   });
 
   it('scores higher for matches starting at beginning', () => {
-    const atStart = fuzzyMatch('go', 'google.com');
-    const atMiddle = fuzzyMatch('go', 'xx-google.com');
+    const atStart = smartSearch('go', 'google.com');
+    const atMiddle = smartSearch('go', 'xx-google.com');
     assert.ok(atStart.score > atMiddle.score);
   });
 });

@@ -6,7 +6,7 @@
  */
 
 import { MSG } from '../../shared/constants.js';
-import { el } from '../../shared/utils.js';
+import { el, positionMenu, inlinePrompt } from '../../shared/utils.js';
 
 let currentState = null;
 let containerEl = null;
@@ -139,14 +139,17 @@ function renderBar() {
 
 function handleBarClick(e) {
   // "+" button
-  if (e.target.closest('.ws-add-btn')) {
-    const name = prompt('Workspace name:');
-    if (name && name.trim()) {
-      chrome.runtime.sendMessage({
-        type: MSG.CREATE_WORKSPACE,
-        payload: { name: name.trim() },
-      }).catch(() => {});
-    }
+  const addBtn = e.target.closest('.ws-add-btn');
+  if (addBtn) {
+    (async () => {
+      const name = await inlinePrompt(addBtn, 'Workspace name');
+      if (name) {
+        chrome.runtime.sendMessage({
+          type: MSG.CREATE_WORKSPACE,
+          payload: { name },
+        }).catch(() => {});
+      }
+    })();
     return;
   }
 
@@ -187,15 +190,17 @@ function showWorkspaceContextMenu(wsId, x, y) {
 
   // Rename
   const renameItem = el('div', { className: 'context-menu-item' }, 'Rename');
-  renameItem.addEventListener('click', () => {
-    const newName = prompt('Rename workspace:', ws.name);
-    if (newName && newName.trim()) {
+  renameItem.addEventListener('click', async () => {
+    menuEl.hidden = true;
+    const pill = containerEl?.querySelector(`[data-ws-id="${wsId}"]`);
+    const anchor = pill || containerEl;
+    const newName = await inlinePrompt(anchor, 'Rename workspace', ws.name);
+    if (newName) {
       chrome.runtime.sendMessage({
         type: MSG.RENAME_WORKSPACE,
-        payload: { workspaceId: wsId, name: newName.trim() },
+        payload: { workspaceId: wsId, name: newName },
       }).catch(() => {});
     }
-    menuEl.hidden = true;
   });
   items.push(renameItem);
 
@@ -207,7 +212,7 @@ function showWorkspaceContextMenu(wsId, x, y) {
     const currentIdx = colors.indexOf(ws.color);
     const nextColor = colors[(currentIdx + 1) % colors.length];
     chrome.runtime.sendMessage({
-      type: MSG.RENAME_WORKSPACE,
+      type: MSG.UPDATE_WORKSPACE,
       payload: { workspaceId: wsId, color: nextColor },
     }).catch(() => {});
     menuEl.hidden = true;
@@ -232,11 +237,5 @@ function showWorkspaceContextMenu(wsId, x, y) {
   menuEl.hidden = false;
 
   // Position
-  requestAnimationFrame(() => {
-    const rect = menuEl.getBoundingClientRect();
-    const maxX = window.innerWidth - rect.width - 4;
-    const maxY = window.innerHeight - rect.height - 4;
-    menuEl.style.left = `${Math.min(x, maxX)}px`;
-    menuEl.style.top = `${Math.min(y, maxY)}px`;
-  });
+  requestAnimationFrame(() => positionMenu(menuEl, x, y));
 }

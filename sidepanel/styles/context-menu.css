@@ -51,8 +51,8 @@
   outline: none;
 }
 
+/* border-color focus consolidated in base.css */
 .context-menu-rename-input:focus {
-  border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
 

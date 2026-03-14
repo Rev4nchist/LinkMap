@@ -35,9 +35,7 @@
   color: var(--text-primary);
 }
 
-#search-input:focus {
-  border-color: var(--accent);
-}
+/* Focus style consolidated in base.css */
 
 #search-input::placeholder {
   color: var(--text-muted);

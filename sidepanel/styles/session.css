@@ -150,6 +150,64 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Session Window Breakdown
+   --------------------------------------------------------------------------- */
+
+.session-entry {
+  flex-wrap: wrap;
+}
+
+.session-windows {
+  padding: 4px 12px 4px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.session-window-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.session-window-entry:hover {
+  background: var(--bg-hover);
+}
+
+.session-window-name {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.session-window-meta {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 10px;
+}
+
+.session-window-restore-btn {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted, var(--text-secondary));
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 2px;
+}
+
+.session-window-entry:hover .session-window-restore-btn {
+  opacity: 1;
+}
+
+.session-window-restore-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary, var(--bg-hover));
+}
+
+/* ---------------------------------------------------------------------------
    Recently Closed Tabs Panel
    --------------------------------------------------------------------------- */
 
