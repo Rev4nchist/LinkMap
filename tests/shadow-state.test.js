@@ -986,6 +986,30 @@ describe('windowNames — reconciliation remap', () => {
     assert.equal(s.getWindowName(200), null);
   });
 
+  it('remaps window names across restart (URL-matched tabs with new IDs)', () => {
+    const s = new ShadowState();
+    // Saved state: old tab IDs and old window IDs
+    s.addTab(100, makeTab({ tabId: 100, windowId: 10, url: 'https://github.com', title: 'GitHub' }));
+    s.addTab(200, makeTab({ tabId: 200, windowId: 20, url: 'https://google.com', title: 'Google' }));
+    s.setWindowName(10, 'Dev');
+    s.setWindowName(20, 'Research');
+
+    // After restart: Chrome assigns new tab IDs AND new window IDs
+    const liveTabs = [
+      makeLiveTab({ id: 501, windowId: 50, url: 'https://github.com', title: 'GitHub', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 60, url: 'https://google.com', title: 'Google', index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    // Window names should be remapped to new window IDs
+    assert.equal(s.getWindowName(50), 'Dev');
+    assert.equal(s.getWindowName(60), 'Research');
+    // Old window IDs should be gone
+    assert.equal(s.getWindowName(10), null);
+    assert.equal(s.getWindowName(20), null);
+  });
+
   it('preserves window names when windowIds do not change', () => {
     const s = new ShadowState();
     s.addTab(1, makeTab({ tabId: 1, windowId: 100 }));

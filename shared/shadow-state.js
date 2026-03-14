@@ -735,6 +735,10 @@ export class ShadowState {
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
 
+      // Propagate saved windowId to new tab ID so vote-counting can build windowIdMap
+      const oldWid = savedTabWindowIds.get(savedId);
+      if (oldWid !== undefined) savedTabWindowIds.set(best.id, oldWid);
+
       // Remove used candidate
       const idx = candidates.indexOf(best);
       if (idx !== -1) candidates.splice(idx, 1);
@@ -767,6 +771,8 @@ export class ShadowState {
       }
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
+      const oldWid2b = savedTabWindowIds.get(savedId);
+      if (oldWid2b !== undefined) savedTabWindowIds.set(best.id, oldWid2b);
       const idx = candidates.indexOf(best);
       if (idx !== -1) candidates.splice(idx, 1);
     }
@@ -797,8 +803,11 @@ export class ShadowState {
         if (dist < bestDist) { bestDist = dist; bestIdx = i; }
       }
       if (bestDist <= 3) {  // Only match if within 3 positions
-        this.replaceTabId(savedId, windowTabs[bestIdx].id);
-        matchedLiveIds.add(windowTabs[bestIdx].id);
+        const matchedLiveTab = windowTabs[bestIdx];
+        this.replaceTabId(savedId, matchedLiveTab.id);
+        matchedLiveIds.add(matchedLiveTab.id);
+        const oldWid3 = savedTabWindowIds.get(savedId);
+        if (oldWid3 !== undefined) savedTabWindowIds.set(matchedLiveTab.id, oldWid3);
         windowTabs.splice(bestIdx, 1);
       }
     }
