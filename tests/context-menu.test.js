@@ -1,150 +1,16 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-
-// ---------------------------------------------------------------------------
-// Minimal DOM + Chrome mock
-// ---------------------------------------------------------------------------
-
-class MockElement {
-  constructor(tag) {
-    this.tagName = tag.toUpperCase();
-    this.attributes = {};
-    this.dataset = {};
-    this.className = '';
-    this.children = [];
-    this.childNodes = [];
-    this.textContent = '';
-    this.innerHTML = '';
-    this.hidden = false;
-    this._listeners = {};
-    this.style = {};
-    this.title = '';
-    this.parentNode = null;
-  }
-
-  setAttribute(key, value) {
-    this.attributes[key] = String(value);
-    if (key === 'title') this.title = value;
-    if (key === 'role') this.attributes.role = value;
-  }
-
-  getAttribute(key) {
-    return this.attributes[key] ?? null;
-  }
-
-  appendChild(child) {
-    if (child) {
-      this.children.push(child);
-      this.childNodes.push(child);
-      child.parentNode = this;
-    }
-    return child;
-  }
-
-  replaceChildren(...newChildren) {
-    this.children = [];
-    this.childNodes = [];
-    for (const child of newChildren) {
-      if (child) {
-        this.children.push(child);
-        this.childNodes.push(child);
-        child.parentNode = this;
-      }
-    }
-  }
-
-  addEventListener(type, handler) {
-    if (!this._listeners[type]) this._listeners[type] = [];
-    this._listeners[type].push(handler);
-  }
-
-  removeEventListener() {}
-
-  closest(selector) {
-    let el = this;
-    while (el) {
-      if (selector.startsWith('.')) {
-        const cls = selector.slice(1);
-        if (el.className && el.className.split(' ').includes(cls)) return el;
-      }
-      el = el.parentNode;
-    }
-    return null;
-  }
-
-  querySelectorAll(selector) {
-    const results = [];
-    const search = (node) => {
-      if (!node.children) return;
-      for (const child of node.children) {
-        if (!child || !child.tagName) continue;
-        if (selector.startsWith('.')) {
-          const cls = selector.slice(1);
-          if (child.className && child.className.split(' ').includes(cls)) results.push(child);
-        } else if (selector.startsWith('[')) {
-          const match = selector.match(/\[([^=]+)(?:="([^"]*)")?\]/);
-          if (match) {
-            const [, attr, val] = match;
-            if (attr === 'role') {
-              if (val === undefined || child.attributes.role === val) results.push(child);
-            } else if (attr.startsWith('data-')) {
-              const key = attr.replace('data-', '');
-              if (val === undefined || child.dataset[key] === val) results.push(child);
-            }
-          }
-        }
-        search(child);
-      }
-    };
-    search(this);
-    return results;
-  }
-
-  querySelector(selector) {
-    const all = this.querySelectorAll(selector);
-    return all[0] ?? null;
-  }
-
-  contains(el) {
-    if (el === this) return true;
-    for (const child of this.children) {
-      if (child === el) return true;
-      if (child.contains && child.contains(el)) return true;
-    }
-    return false;
-  }
-
-  after() {}
-  focus() {}
-  select() {}
-  getBoundingClientRect() {
-    return { top: 0, bottom: 100, left: 0, right: 200, width: 200, height: 100 };
-  }
-}
-
-class MockTextNode {
-  constructor(text) {
-    this.textContent = text;
-    this.nodeType = 3;
-    this.parentNode = null;
-  }
-}
+import { MockElement, MockTextNode, setupMockDOM } from './helpers/mock-dom.js';
 
 // The context-menu module calls document.getElementById('context-menu') at module level.
 // We need a proper menuEl mock that gets returned.
 const menuElMock = new MockElement('div');
 menuElMock.hidden = true;
 
-globalThis.document = {
-  createElement(tag) { return new MockElement(tag); },
-  createTextNode(text) { return new MockTextNode(text); },
-  getElementById(id) {
-    if (id === 'context-menu') return menuElMock;
-    return new MockElement('div');
-  },
-  addEventListener() {},
-  querySelector() { return null; },
-  body: new MockElement('body'),
+const doc = setupMockDOM();
+doc.getElementById = (id) => {
+  if (id === 'context-menu') return menuElMock;
+  return new MockElement('div');
 };
 
 globalThis.window = { innerWidth: 1024, innerHeight: 768 };
