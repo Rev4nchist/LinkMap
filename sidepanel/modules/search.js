@@ -7,7 +7,7 @@
 
 import { smartSearch, el, debounce } from '../../shared/utils.js';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
-import { DEFAULT_FAVICON } from '../../shared/constants.js';
+import { DEFAULT_FAVICON, getFaviconUrl } from '../../shared/constants.js';
 
 /**
  * Initialize search functionality.
@@ -138,7 +138,7 @@ export function renderSearchResults(results, container) {
   const elements = results.map(({ tab, tabId, titleMatch, urlMatch }) => {
     const favicon = el('img', {
       className: 'tab-favicon',
-      src: tab.favIconUrl || DEFAULT_FAVICON,
+      src: getFaviconUrl(tab),
       width: '16',
       height: '16',
       alt: ''
@@ -160,6 +160,7 @@ export function renderSearchResults(results, container) {
 
     const entry = el('div', {
       className: 'tab-entry',
+      draggable: 'true',
       dataset: { tabId: String(tabId) }
     }, favicon, titleEl, urlEl, closeBtn);
 

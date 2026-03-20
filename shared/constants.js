@@ -139,6 +139,23 @@ export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
   '</svg>'
 );
 
+/**
+ * Returns the best favicon URL for a tab, using Google's favicon service
+ * as fallback when tab.favIconUrl is empty.
+ * @param {Object} tab - TabNode with favIconUrl and url properties
+ * @returns {string}
+ */
+export function getFaviconUrl(tab) {
+  if (tab.favIconUrl) return tab.favIconUrl;
+  if (tab.url && tab.url.startsWith('http')) {
+    try {
+      const domain = new URL(tab.url).hostname;
+      return `https://www.google.com/s2/favicons?sz=32&domain=${domain}`;
+    } catch { /* invalid URL */ }
+  }
+  return DEFAULT_FAVICON;
+}
+
 // Saved groups storage key
 export const SAVED_GROUPS_KEY = 'linkmap_saved_groups';
 
@@ -158,6 +175,9 @@ export const TAB_NOTES_KEY = 'linkmap_tab_notes';
 
 // Settings storage
 export const SETTINGS_KEY = 'linkmap_settings';
+
+// Tree edge backup (URL-keyed parent-child map for cross-restart recovery)
+export const TREE_EDGES_KEY = 'linkmap_tree_edges';
 
 // Timing
 export const SAVE_DEBOUNCE_MS = 500;

@@ -7,7 +7,7 @@
  */
 
 import { ShadowState } from './shared/shadow-state.js';
-import { MSG, STORAGE_KEY, SAVE_DEBOUNCE_MS, THEME_ACCENTS, UNGROUPED_GROUP_ID, SAVED_GROUPS_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, MAX_AUTO_SAVES, SETTINGS_KEY, AUTO_GROUP_RULES_KEY, WORKSPACES_KEY, TAB_NOTES_KEY, SUPPRESS_COLLAPSE_MS, SUPPRESS_TITLE_MS, RETRY_GROUP_TITLE_DELAYS } from './shared/constants.js';
+import { MSG, STORAGE_KEY, SAVE_DEBOUNCE_MS, THEME_ACCENTS, UNGROUPED_GROUP_ID, SAVED_GROUPS_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, MAX_AUTO_SAVES, SETTINGS_KEY, AUTO_GROUP_RULES_KEY, WORKSPACES_KEY, TAB_NOTES_KEY, SUPPRESS_COLLAPSE_MS, SUPPRESS_TITLE_MS, RETRY_GROUP_TITLE_DELAYS, TREE_EDGES_KEY } from './shared/constants.js';
 import { debounce } from './shared/utils.js';
 import { nearestChromeGroupColor } from './shared/color-distance.js';
 
@@ -81,13 +81,31 @@ function suppressGroupTitleForBurst() {
  */
 const saveState = debounce(() => {
   try {
-    chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() })
-      .catch(err => console.error('[LinkMap] saveState failed:', err));
+    chrome.storage.local.set({
+      [STORAGE_KEY]: state.toSerializable(),
+      [TREE_EDGES_KEY]: state.toTreeEdges(),
+    }).catch(err => console.error('[LinkMap] saveState failed:', err));
   } catch (err) {
     console.error('[LinkMap] saveState serialization failed:', err);
   }
   DEBUG && console.log('[LinkMap] State saved');
 }, SAVE_DEBOUNCE_MS);
+
+/**
+ * Immediate (non-debounced) save for critical tree structure changes.
+ * Use for operations that modify parent-child relationships.
+ */
+function saveStateImmediate() {
+  try {
+    chrome.storage.local.set({
+      [STORAGE_KEY]: state.toSerializable(),
+      [TREE_EDGES_KEY]: state.toTreeEdges(),
+    }).catch(err => console.error('[LinkMap] saveStateImmediate failed:', err));
+  } catch (err) {
+    console.error('[LinkMap] saveStateImmediate serialization failed:', err);
+  }
+  DEBUG && console.log('[LinkMap] State saved (immediate)');
+}
 
 // ---------------------------------------------------------------------------
 // Broadcasting
@@ -138,6 +156,9 @@ const broadcastState = debounce(() => {
 
 /** Convenience: save + broadcast in one call. */
 function commitState() { saveState(); broadcastState(); }
+
+/** Save + broadcast with immediate save + tree edges for tree-structure changes. */
+function commitTreeChange() { saveStateImmediate(); broadcastState(); }
 
 // ---------------------------------------------------------------------------
 // Initialization helpers
@@ -223,12 +244,44 @@ async function init() {
       }
     }
 
-    // 3. Query all live tabs and reconcile
-    const liveTabs = await chrome.tabs.query({});
+    // 3. Query all live tabs — wait for Chrome session restore to populate URLs
+    const MAX_WAIT_MS = 10000;
+    const POLL_MS = 300;
+    const startTime = Date.now();
+    let liveTabs = await chrome.tabs.query({});
+
+    // Chrome restores tabs lazily on startup. Poll until URLs are available.
+    while (Date.now() - startTime < MAX_WAIT_MS) {
+      const withUrl = liveTabs.filter(t => t.url && t.url !== 'chrome://newtab/' && t.url !== 'about:blank');
+      if (liveTabs.length === 0 || withUrl.length / liveTabs.length >= 0.8) break;
+      console.log(`[LinkMap] Waiting for session restore: ${withUrl.length}/${liveTabs.length} tabs have URLs`);
+      await new Promise(r => setTimeout(r, POLL_MS));
+      liveTabs = await chrome.tabs.query({});
+    }
+    console.log(`[LinkMap] Session restore wait: ${Date.now() - startTime}ms, ${liveTabs.length} tabs`);
+
     const windowIdMap = state.reconcileWithLiveTabs(liveTabs);
 
     // 3c. Check for crash recovery
     checkForCrashRecovery(savedTabCount, liveTabs.length);
+
+    // 3d. Tree edge repair: if reconciliation left tree mostly flat, restore from backup
+    const rootCount = state.rootIds.length;
+    const totalCount = state.tabs.size;
+    if (totalCount > 3 && rootCount > totalCount * 0.8) {
+      try {
+        const edgesResult = await chrome.storage.local.get(TREE_EDGES_KEY);
+        const savedEdges = edgesResult[TREE_EDGES_KEY];
+        if (savedEdges) {
+          const restored = state.repairFromTreeEdges(savedEdges);
+          if (restored > 0) {
+            console.log(`[LinkMap] Tree edge repair: restored ${restored} parent-child relationships`);
+          }
+        }
+      } catch (err) {
+        console.error('[LinkMap] Tree edge repair failed:', err);
+      }
+    }
 
     // 3b. Query all live tab groups and reconcile
     const liveGroups = await chrome.tabGroups.query({});
@@ -957,7 +1010,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 
   state.addTab(tab.id, node);
   invalidateDuplicateMap();
-  commitState();
+  commitTreeChange();
 
   // Auto-group: check if new tab matches any domain rules
   if (tab.url) applyAutoGroupRules(tab);
@@ -989,7 +1042,7 @@ chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
   // Chrome fires spurious tabGroups.onUpdated(collapsed: true) after tab removal.
   suppressGroupCollapseForBurst();
 
-  commitState();
+  commitTreeChange();
 
   DEBUG && console.log(`[LinkMap] Tab removed: ${tabId}`);
 });
@@ -1274,7 +1327,10 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
  * chrome.runtime.onSuspend — Flush state before worker terminates.
  */
 chrome.runtime.onSuspend.addListener(() => {
-  chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() });
+  chrome.storage.local.set({
+    [STORAGE_KEY]: state.toSerializable(),
+    [TREE_EDGES_KEY]: state.toTreeEdges(),
+  });
   // Fire a quick auto-save before suspend
   saveSession('Auto-Save (Suspend)', true);
   console.log('[LinkMap] State flushed on suspend');
@@ -1346,7 +1402,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
           }
         }
-        commitState();
+        commitTreeChange();
       }
       break;
     }
@@ -1447,22 +1503,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               index: refTab.index + 1,
               openerTabId: payload.tabId,
             });
-            // onCreated already fired — reposition as sibling immediately after ref tab
+            // onCreated already fired — reposition in sidebar tree
             if (newTab?.id) {
-              const refParentId = refTab.parentId ?? null;
-              if (refParentId != null) {
-                const parent = state.getTab(refParentId);
-                if (parent) {
-                  const refIdx = parent.children.indexOf(payload.tabId);
-                  state.moveTab(newTab.id, refParentId, refIdx + 1);
-                }
+              if (refTab.pinned) {
+                // Pinned tab: place new tab at the top of the sidebar
+                state.moveTab(newTab.id, null, 0);
               } else {
-                const refIdx = state.rootIds.indexOf(payload.tabId);
-                if (refIdx !== -1) {
-                  state.moveTab(newTab.id, null, refIdx + 1);
+                // Normal tab: place as sibling immediately after ref tab
+                const refParentId = refTab.parentId ?? null;
+                if (refParentId != null) {
+                  const parent = state.getTab(refParentId);
+                  if (parent) {
+                    const refIdx = parent.children.indexOf(payload.tabId);
+                    state.moveTab(newTab.id, refParentId, refIdx + 1);
+                  }
+                } else {
+                  const refIdx = state.rootIds.indexOf(payload.tabId);
+                  if (refIdx !== -1) {
+                    state.moveTab(newTab.id, null, refIdx + 1);
+                  }
                 }
               }
-              commitState();
+              commitTreeChange();
             }
           } catch (err) {
             console.error('[LinkMap] NEW_TAB_BELOW failed:', err);

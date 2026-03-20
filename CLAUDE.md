@@ -37,6 +37,11 @@ icons/                  # Extension icons (16, 32, 48, 128)
 vendor/                 # SortableJS (if not CDN)
 ```
 
+## Grep Patterns
+- Use single identifiers: `newTabBelow`, `commitTreeChange`, `MSG.NEW_TAB`
+- Avoid multi-word OR patterns like `New Tab Below|newTabBelow|addTab` — the smart-search-router hook classifies 3+ word phrases as semantic queries and blocks them
+- When searching for a concept, run multiple simple greps in parallel instead of one complex pattern
+
 ## Dev Workflow
 - No build step — load as unpacked extension in `chrome://extensions`
 - Debug side panel: right-click → Inspect

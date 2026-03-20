@@ -6,10 +6,10 @@
  */
 
 import { el } from '../../shared/utils.js';
-import { CHROME_GROUP_COLORS, UNGROUPED_GROUP_ID, DEFAULT_FAVICON } from '../../shared/constants.js';
+import { CHROME_GROUP_COLORS, UNGROUPED_GROUP_ID, DEFAULT_FAVICON, getFaviconUrl } from '../../shared/constants.js';
 
 // Re-export for consumers that import from here
-export { DEFAULT_FAVICON };
+export { DEFAULT_FAVICON, getFaviconUrl };
 
 /** Maximum nesting depth to prevent stack overflow on circular structures. */
 const MAX_TREE_DEPTH = 50;
@@ -248,7 +248,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
   }
 
   // Favicon
-  const faviconSrc = tab.favIconUrl || DEFAULT_FAVICON;
+  const faviconSrc = getFaviconUrl(tab);
   const faviconClasses = tab.status === 'loading'
     ? 'tab-favicon tab-loading'
     : 'tab-favicon';
@@ -260,7 +260,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     height: '16',
     alt: '',
   });
-  favicon.onerror = () => { favicon.style.visibility = 'hidden'; };
+  favicon.onerror = () => { favicon.src = DEFAULT_FAVICON; favicon.onerror = null; };
 
   // Title
   const title = el('span', { className: 'tab-title' }, tab.title || tab.url || '');
@@ -360,7 +360,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
  * @returns {HTMLElement}
  */
 function buildPinnedTab(tab) {
-  const faviconSrc = tab.favIconUrl || DEFAULT_FAVICON;
+  const faviconSrc = getFaviconUrl(tab);
 
   const favicon = el('img', {
     src: faviconSrc,
@@ -514,6 +514,16 @@ export function patchElement(existing, incoming) {
     existing.style.cssText = incoming.style.cssText;
   }
 
+  // Sync draggable attribute (lost when search result elements are reused)
+  if (incoming.getAttribute('draggable') !== existing.getAttribute('draggable')) {
+    const val = incoming.getAttribute('draggable');
+    if (val) {
+      existing.setAttribute('draggable', val);
+    } else {
+      existing.removeAttribute('draggable');
+    }
+  }
+
   // Tab-specific patches
   const existingTitle = existing.querySelector?.('.tab-title');
   const incomingTitle = incoming.querySelector?.('.tab-title');
@@ -532,7 +542,13 @@ export function patchElement(existing, incoming) {
   // note subtitle added/removed), fall back to full child replacement to avoid stale DOM.
   if (existing.children.length !== incoming.children.length) {
     const newChildren = [...incoming.children];
-    existing.replaceChildren(...newChildren);
+    try {
+      existing.replaceChildren(...newChildren);
+    } catch {
+      // Child was detached by a concurrent event (e.g. blur during search exit)
+      existing.textContent = '';
+      for (const child of newChildren) existing.appendChild(child);
+    }
     return;
   }
 
@@ -572,9 +588,7 @@ export function patchElement(existing, incoming) {
     if (incomingCurrent) {
       existing.setAttribute('aria-current', incomingCurrent);
     } else if (existingCurrent) {
-      existing.setAttribute('aria-current', '');
-      // Remove the attribute entirely if incoming doesn't have it
-      if (existing.attributes) delete existing.attributes['aria-current'];
+      existing.removeAttribute('aria-current');
     }
   }
 }
