@@ -31,6 +31,13 @@ class MockElement {
 
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key] ?? null; }
+  removeAttribute(key) { delete this.attributes[key]; }
+
+  replaceChildren(...newChildren) {
+    this.children = [];
+    this.childNodes = [];
+    for (const child of newChildren) this.appendChild(child);
+  }
 
   appendChild(child) {
     if (child) {
@@ -110,6 +117,13 @@ function matchesSelector(el, selector) {
 
 function createElement(tag) {
   return new MockElement(tag);
+}
+
+function createTextNode(text) {
+  const node = new MockElement('#text');
+  node.textContent = String(text);
+  node.nodeType = 3;
+  return node;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +290,7 @@ describe('settings module', () => {
     globalThis.document = {
       ...originalDoc,
       createElement: (tag) => createElement(tag),
+      createTextNode: (text) => createTextNode(text),
       getElementById: (id) => null,
     };
 
@@ -312,6 +327,7 @@ describe('multi-select module', () => {
     globalThis.document = {
       ...originalDoc,
       createElement: (tag) => createElement(tag),
+      createTextNode: (text) => createTextNode(text),
       getElementById: (id) => null,
     };
 
@@ -348,6 +364,7 @@ describe('multi-select module', () => {
     globalThis.document = {
       ...originalDoc,
       createElement: (tag) => createElement(tag),
+      createTextNode: (text) => createTextNode(text),
       getElementById: (id) => null,
     };
 

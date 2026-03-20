@@ -5,6 +5,7 @@
  * appears when tabs are selected via Ctrl+Click or Shift+Click.
  */
 
+import { el } from '../../shared/utils.js';
 import { MSG } from '../../shared/constants.js';
 
 /**
@@ -22,17 +23,15 @@ export function initMultiSelect({ treeContainer, getSelectedTabIds, getCurrentSt
 
     // Update data-selected and aria-selected attributes on tab entries
     const hasSelection = selectedTabIds.size > 0;
-    treeContainer.querySelectorAll('.tab-entry[data-tab-id]').forEach(el => {
-      const tabId = Number(el.dataset.tabId);
+    treeContainer.querySelectorAll('.tab-entry[data-tab-id]').forEach(entry => {
+      const tabId = Number(entry.dataset.tabId);
       const isSelected = selectedTabIds.has(tabId);
-      el.dataset.selected = String(isSelected);
+      entry.dataset.selected = String(isSelected);
       if (hasSelection) {
-        el.setAttribute('aria-selected', String(isSelected));
+        entry.setAttribute('aria-selected', String(isSelected));
       } else {
         // Remove aria-selected when no multi-select is active
-        if (el.attributes && el.attributes['aria-selected'] != null) {
-          delete el.attributes['aria-selected'];
-        }
+        entry.removeAttribute('aria-selected');
       }
     });
 
@@ -45,14 +44,14 @@ export function initMultiSelect({ treeContainer, getSelectedTabIds, getCurrentSt
         toolbar.className = 'multi-select-toolbar';
         treeContainer.before(toolbar);
       }
-      toolbar.innerHTML = `
-        <span class="ms-count">${selectedTabIds.size} selected</span>
-        <button data-action="close">Close</button>
-        <button data-action="group">Group</button>
-        <button data-action="sleep">Sleep</button>
-        <button data-action="copy">Copy URLs</button>
-        <button class="ms-clear" data-action="clear">&times;</button>
-      `;
+      toolbar.replaceChildren(
+        el('span', { className: 'ms-count' }, `${selectedTabIds.size} selected`),
+        el('button', { dataset: { action: 'close' } }, 'Close'),
+        el('button', { dataset: { action: 'group' } }, 'Group'),
+        el('button', { dataset: { action: 'sleep' } }, 'Sleep'),
+        el('button', { dataset: { action: 'copy' } }, 'Copy URLs'),
+        el('button', { className: 'ms-clear', dataset: { action: 'clear' } }, '\u00d7'),
+      );
       toolbar.onclick = (e) => {
         const btn = e.target.closest('button');
         if (!btn) return;
