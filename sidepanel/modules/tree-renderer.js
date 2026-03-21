@@ -6,10 +6,10 @@
  */
 
 import { el } from '../../shared/utils.js';
-import { CHROME_GROUP_COLORS, UNGROUPED_GROUP_ID, DEFAULT_FAVICON } from '../../shared/constants.js';
+import { CHROME_GROUP_COLORS, UNGROUPED_GROUP_ID, DEFAULT_FAVICON, getFaviconUrl } from '../../shared/constants.js';
 
 // Re-export for consumers that import from here
-export { DEFAULT_FAVICON };
+export { DEFAULT_FAVICON, getFaviconUrl };
 
 /** Maximum nesting depth to prevent stack overflow on circular structures. */
 const MAX_TREE_DEPTH = 50;
@@ -246,7 +246,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
   }
 
   // Favicon
-  const faviconSrc = tab.favIconUrl || DEFAULT_FAVICON;
+  const faviconSrc = getFaviconUrl(tab);
   const faviconClasses = tab.status === 'loading'
     ? 'tab-favicon tab-loading'
     : 'tab-favicon';
@@ -258,7 +258,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     height: '16',
     alt: '',
   });
-  favicon.onerror = () => { favicon.style.visibility = 'hidden'; };
+  favicon.onerror = () => { favicon.src = DEFAULT_FAVICON; favicon.onerror = null; };
 
   // Title
   const title = el('span', { className: 'tab-title' }, tab.title || tab.url || '');
@@ -358,7 +358,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
  * @returns {HTMLElement}
  */
 function buildPinnedTab(tab) {
-  const faviconSrc = tab.favIconUrl || DEFAULT_FAVICON;
+  const faviconSrc = getFaviconUrl(tab);
 
   const favicon = el('img', {
     src: faviconSrc,
