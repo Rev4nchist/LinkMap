@@ -82,6 +82,12 @@ export class MockElement {
     if (key === 'draggable') this.draggable = value;
     if (key === 'type') this.type = value;
     if (key === 'role') this.attributes.role = value;
+    if (key === 'id') this.id = value;
+    if (key === 'class') this.className = value;
+    if (key.startsWith('data-')) {
+      const dataKey = key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      this.dataset[dataKey] = value;
+    }
   }
 
   getAttribute(key) {
@@ -90,6 +96,12 @@ export class MockElement {
 
   removeAttribute(key) {
     delete this.attributes[key];
+    if (key === 'id') this.id = '';
+    if (key === 'class') this.className = '';
+    if (key.startsWith('data-')) {
+      const dataKey = key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      delete this.dataset[dataKey];
+    }
   }
 
   // --- Child manipulation ---
@@ -97,8 +109,8 @@ export class MockElement {
   appendChild(child) {
     if (child) {
       if (child.parentNode) child.parentNode._removeChild(child);
-      this.children.push(child);
       this.childNodes.push(child);
+      if (child instanceof MockElement) this.children.push(child);
       child.parentNode = this;
     }
     return child;
@@ -107,20 +119,30 @@ export class MockElement {
   insertBefore(newNode, referenceNode) {
     if (!referenceNode) return this.appendChild(newNode);
     if (newNode.parentNode) newNode.parentNode._removeChild(newNode);
-    const idx = this.children.indexOf(referenceNode);
-    if (idx === -1) return this.appendChild(newNode);
-    this.children.splice(idx, 0, newNode);
-    this.childNodes.splice(idx, 0, newNode);
+    const cnIdx = this.childNodes.indexOf(referenceNode);
+    if (cnIdx === -1) return this.appendChild(newNode);
+    this.childNodes.splice(cnIdx, 0, newNode);
+    if (newNode instanceof MockElement) {
+      const elIdx = this.children.indexOf(referenceNode);
+      if (elIdx !== -1) {
+        this.children.splice(elIdx, 0, newNode);
+      } else {
+        this.children.push(newNode);
+      }
+    }
     newNode.parentNode = this;
     return newNode;
   }
 
   _removeChild(child) {
-    const idx = this.children.indexOf(child);
-    if (idx !== -1) {
-      this.children.splice(idx, 1);
-      this.childNodes.splice(idx, 1);
+    const cnIdx = this.childNodes.indexOf(child);
+    if (cnIdx !== -1) {
+      this.childNodes.splice(cnIdx, 1);
       child.parentNode = null;
+    }
+    if (child instanceof MockElement) {
+      const elIdx = this.children.indexOf(child);
+      if (elIdx !== -1) this.children.splice(elIdx, 1);
     }
   }
 
@@ -129,13 +151,13 @@ export class MockElement {
   }
 
   replaceChildren(...newChildren) {
-    for (const child of [...this.children]) child.parentNode = null;
+    for (const child of [...this.childNodes]) child.parentNode = null;
     this.children = [];
     this.childNodes = [];
     for (const child of newChildren) {
       if (child) {
-        this.children.push(child);
         this.childNodes.push(child);
+        if (child instanceof MockElement) this.children.push(child);
         child.parentNode = this;
       }
     }
@@ -170,18 +192,24 @@ export class MockElement {
 
   before(newEl) {
     if (this.parentNode) {
-      const idx = this.parentNode.children.indexOf(this);
+      const cnIdx = this.parentNode.childNodes.indexOf(this);
+      this.parentNode.childNodes.splice(cnIdx, 0, newEl);
+      if (newEl instanceof MockElement) {
+        const elIdx = this.parentNode.children.indexOf(this);
+        if (elIdx !== -1) this.parentNode.children.splice(elIdx, 0, newEl);
+      }
       newEl.parentNode = this.parentNode;
-      this.parentNode.children.splice(idx, 0, newEl);
-      this.parentNode.childNodes.splice(idx, 0, newEl);
     }
   }
 
   after(newEl) {
     if (this.parentNode) {
-      const idx = this.parentNode.children.indexOf(this);
-      this.parentNode.children.splice(idx + 1, 0, newEl);
-      this.parentNode.childNodes.splice(idx + 1, 0, newEl);
+      const cnIdx = this.parentNode.childNodes.indexOf(this);
+      this.parentNode.childNodes.splice(cnIdx + 1, 0, newEl);
+      if (newEl instanceof MockElement) {
+        const elIdx = this.parentNode.children.indexOf(this);
+        if (elIdx !== -1) this.parentNode.children.splice(elIdx + 1, 0, newEl);
+      }
       newEl.parentNode = this.parentNode;
     }
   }

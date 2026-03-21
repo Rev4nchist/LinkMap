@@ -10,7 +10,7 @@ menuElMock.hidden = true;
 const doc = setupMockDOM();
 doc.getElementById = (id) => {
   if (id === 'context-menu') return menuElMock;
-  return new MockElement('div');
+  return null;
 };
 
 globalThis.window = { innerWidth: 1024, innerHeight: 768 };
