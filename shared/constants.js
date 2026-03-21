@@ -145,6 +145,7 @@ export const SAVED_GROUPS_KEY = 'linkmap_saved_groups';
 // Session storage
 export const SESSIONS_KEY = 'linkmap_sessions';
 export const AUTO_SAVE_INTERVAL_MINUTES = 5;
+export const AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES = 5;
 export const MAX_AUTO_SAVES = 10;
 
 // Auto-grouping rules storage

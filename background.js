@@ -187,10 +187,7 @@ chrome.alarms.onAlarm.addListener(sessions.onAlarm);
 // Runtime
 chrome.runtime.onMessage.addListener(handleMessage);
 chrome.runtime.onSuspend.addListener(() => {
-  // MV3: onSuspend is synchronous — best-effort persist
-  chrome.storage.local.set({ [STORAGE_KEY]: context.state.toSerializable() });
-  sessions.saveSession('Auto-Save (Suspend)', true);
-  console.log('[LinkMap] State flushed on suspend');
+  sessions.onSuspend();
 });
 
 // Keyboard shortcuts

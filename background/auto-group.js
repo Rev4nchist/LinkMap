@@ -43,9 +43,9 @@ export function urlMatchesPattern(url, pattern) {
       return hostname === domain || hostname.endsWith('.' + domain);
     }
 
-    // Exact domain or domain with path wildcard
+    // Exact domain or domain with path wildcard — no subdomain matching
     const patternDomain = pattern.replace(/\/\*$/, '');
-    return hostname === patternDomain || hostname.endsWith('.' + patternDomain);
+    return hostname === patternDomain;
   } catch {
     return false;
   }

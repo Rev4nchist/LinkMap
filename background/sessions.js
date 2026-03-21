@@ -6,7 +6,7 @@
  */
 
 import {
-  MSG, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, MAX_AUTO_SAVES,
+  MSG, STORAGE_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES, MAX_AUTO_SAVES,
 } from '../shared/constants.js';
 
 const AUTO_SAVE_ALARM = 'linkmap-auto-save';
@@ -37,10 +37,10 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
   }
 
   function setupAutoArchiveAlarm() {
-    // Check every 5 minutes for stale tabs
+    // Check every AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES for stale tabs
     chrome.alarms.create(AUTO_ARCHIVE_ALARM, {
-      delayInMinutes: 5,
-      periodInMinutes: 5,
+      delayInMinutes: AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES,
+      periodInMinutes: AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES,
     });
   }
 
@@ -449,8 +449,9 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
   // -----------------------------------------------------------------------
 
   function onSuspend() {
-    chrome.storage.local.set({ ['linkmap_state']: getState().toSerializable() });
-    saveSession('Auto-Save (Suspend)', true);
+    chrome.storage.local.set({ [STORAGE_KEY]: getState().toSerializable() });
+    // Best-effort — async save may not complete before MV3 worker terminates
+    saveSession('Auto-Save (Suspend)', true).catch(() => {});
     console.log('[LinkMap] State flushed on suspend');
   }
 

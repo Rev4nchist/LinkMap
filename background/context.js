@@ -159,6 +159,7 @@ export function createContext() {
           if (!allHaveTitles && retryCount < retryDelays.length) attempt();
         } catch (e) {
           // Service worker may have been suspended
+          ctx.DEBUG && console.warn('[LinkMap] retryMissingGroupTitles failed:', e);
         }
       }, retryDelays[retryCount]);
     }

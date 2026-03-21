@@ -36,7 +36,7 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       pinned: tab.pinned ?? false,
       audible: false,
       status: tab.status || 'loading',
-      groupId: tab.groupId || UNGROUPED_GROUP_ID,
+      groupId: tab.groupId ?? UNGROUPED_GROUP_ID,
       index: tab.index,
       windowId: tab.windowId,
     };
