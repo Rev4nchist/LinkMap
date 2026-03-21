@@ -34,6 +34,9 @@ class MockElement {
   removeAttribute(key) { delete this.attributes[key]; }
 
   replaceChildren(...newChildren) {
+    for (const child of this.childNodes) {
+      if (child && child.parentNode === this) child.parentNode = null;
+    }
     this.children = [];
     this.childNodes = [];
     for (const child of newChildren) this.appendChild(child);
