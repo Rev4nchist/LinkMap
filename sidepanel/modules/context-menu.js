@@ -13,6 +13,11 @@ import { buildWorkspaceMenuItems } from './workspace-ui.js';
 const menuEl = document.getElementById('context-menu');
 let currentTabId = null;
 let currentGroupId = null;
+
+// State pattern: module-level mutable state updated via setContextMenuState().
+// Alternative pattern (used by search.js): closure-based getState() callback.
+// Both are valid — this module uses module-level state for simplicity since
+// menu items reference state at click-time, not at render-time.
 let currentState = null;
 
 /**
