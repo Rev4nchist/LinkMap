@@ -144,7 +144,7 @@ export function renderSearchResults(results, container) {
       alt: ''
     });
     // Fallback for broken favicons
-    favicon.onerror = () => { favicon.style.visibility = 'hidden'; };
+    favicon.onerror = () => { favicon.src = DEFAULT_FAVICON; favicon.onerror = null; };
 
     const titleEl = titleMatch.match
       ? highlightText(tab.title || 'Untitled', titleMatch.indices)
