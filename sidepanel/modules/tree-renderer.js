@@ -138,7 +138,6 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
 
     // Render tabs for this window
     const emittedGroups = new Set();
-    let lastGroupId = null;
     for (const rootId of windowRootIds) {
       const tab = tabs[rootId];
       if (!tab) continue;
@@ -153,7 +152,6 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
         treeElements.push(buildGroupHeader(groupId, group, resolvedColor, memberCount));
         emittedGroups.add(groupId);
       }
-      lastGroupId = groupId;
 
       // Skip tabs in collapsed Chrome groups (group header remains visible)
       if (groupId !== UNGROUPED_GROUP_ID) {

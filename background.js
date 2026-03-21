@@ -762,7 +762,9 @@ async function loadAutoGroupRules() {
   try {
     const result = await chrome.storage.local.get(AUTO_GROUP_RULES_KEY);
     autoGroupRules = (result[AUTO_GROUP_RULES_KEY] || []).filter(validateRule);
-  } catch (_) {}
+  } catch (err) {
+    console.warn('[LinkMap] loadAutoGroupRules failed:', err);
+  }
 }
 
 async function saveAutoGroupRules() {
@@ -1274,6 +1276,8 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
  * chrome.runtime.onSuspend — Flush state before worker terminates.
  */
 chrome.runtime.onSuspend.addListener(() => {
+  // MV3: onSuspend is synchronous — cannot await storage writes.
+  // Best-effort persist; commitState has already saved most state via debounce.
   chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() });
   // Fire a quick auto-save before suspend
   saveSession('Auto-Save (Suspend)', true);
@@ -2004,7 +2008,7 @@ function moveTabBeforeAfter(tabId, parentId, targetTabId, position, needsWindowM
 function saveWorkspaces() {
   chrome.storage.local.set({
     [WORKSPACES_KEY]: { workspaces, activeWorkspaceId },
-  });
+  }).catch(err => console.warn('[LinkMap] saveWorkspaces failed:', err));
 }
 
 // ---------------------------------------------------------------------------
