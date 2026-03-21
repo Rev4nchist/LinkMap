@@ -206,17 +206,22 @@ export function createMessageHandler({
                 openerTabId: payload.tabId,
               });
               if (newTab?.id) {
-                const refParentId = refTab.parentId ?? null;
-                if (refParentId != null) {
-                  const parent = state.getTab(refParentId);
-                  if (parent) {
-                    const refIdx = parent.children.indexOf(payload.tabId);
-                    state.moveTab(newTab.id, refParentId, refIdx + 1);
-                  }
+                if (refTab.pinned) {
+                  // Pinned tab: place new tab at the top of the sidebar
+                  state.moveTab(newTab.id, null, 0);
                 } else {
-                  const refIdx = state.rootIds.indexOf(payload.tabId);
-                  if (refIdx !== -1) {
-                    state.moveTab(newTab.id, null, refIdx + 1);
+                  const refParentId = refTab.parentId ?? null;
+                  if (refParentId != null) {
+                    const parent = state.getTab(refParentId);
+                    if (parent) {
+                      const refIdx = parent.children.indexOf(payload.tabId);
+                      state.moveTab(newTab.id, refParentId, refIdx + 1);
+                    }
+                  } else {
+                    const refIdx = state.rootIds.indexOf(payload.tabId);
+                    if (refIdx !== -1) {
+                      state.moveTab(newTab.id, null, refIdx + 1);
+                    }
                   }
                 }
                 commitState();
