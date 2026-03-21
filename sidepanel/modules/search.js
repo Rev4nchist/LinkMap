@@ -6,8 +6,7 @@
  */
 
 import { smartSearch, el, debounce } from '../../shared/utils.js';
-import { SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
-import { DEFAULT_FAVICON } from '../../shared/constants.js';
+import { DEFAULT_FAVICON, SEARCH_DEBOUNCE_MS } from '../../shared/constants.js';
 
 /**
  * Initialize search functionality.
@@ -144,7 +143,7 @@ export function renderSearchResults(results, container) {
       alt: ''
     });
     // Fallback for broken favicons
-    favicon.onerror = () => { favicon.style.visibility = 'hidden'; };
+    favicon.onerror = () => { favicon.src = DEFAULT_FAVICON; favicon.onerror = null; };
 
     const titleEl = titleMatch.match
       ? highlightText(tab.title || 'Untitled', titleMatch.indices)
