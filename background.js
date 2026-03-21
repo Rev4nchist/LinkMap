@@ -2008,7 +2008,7 @@ function moveTabBeforeAfter(tabId, parentId, targetTabId, position, needsWindowM
 function saveWorkspaces() {
   chrome.storage.local.set({
     [WORKSPACES_KEY]: { workspaces, activeWorkspaceId },
-  }).catch(() => {});
+  }).catch(err => console.warn('[LinkMap] saveWorkspaces failed:', err));
 }
 
 // ---------------------------------------------------------------------------
