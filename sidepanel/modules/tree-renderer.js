@@ -587,9 +587,7 @@ export function patchElement(existing, incoming) {
     if (incomingCurrent) {
       existing.setAttribute('aria-current', incomingCurrent);
     } else if (existingCurrent) {
-      existing.setAttribute('aria-current', '');
-      // Remove the attribute entirely if incoming doesn't have it
-      if (existing.attributes) delete existing.attributes['aria-current'];
+      existing.removeAttribute('aria-current');
     }
   }
 }
