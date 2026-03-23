@@ -24,8 +24,14 @@ const RELEVANT_CHANGE_FIELDS = new Set([
 export function createTabEventHandlers({ context, applyAutoGroupRules, repositionTabToGroup, getPinnedBoundaryIndex }) {
   const { ctx, commitState, broadcastState, invalidateDuplicateMap, suppressGroupCollapseForBurst, suppressGroupTitleForBurst } = context;
 
+  /** @type {Array<{type: string, [key: string]: *}>} Events buffered before init completes. */
+  const pendingEvents = [];
+
   function onCreated(tab) {
-    if (!ctx.initComplete) return;
+    if (!ctx.initComplete) {
+      pendingEvents.push({ type: 'created', tab });
+      return;
+    }
     const state = context.state;
     const node = {
       tabId: tab.id,
@@ -52,7 +58,10 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
   }
 
   function onRemoved(tabId, _removeInfo) {
-    if (!ctx.initComplete) return;
+    if (!ctx.initComplete) {
+      pendingEvents.push({ type: 'removed', tabId, removeInfo: _removeInfo });
+      return;
+    }
     const state = context.state;
     state.removeTab(tabId);
     invalidateDuplicateMap();
@@ -79,7 +88,10 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
   }
 
   function onUpdated(tabId, changeInfo, _tab) {
-    if (!ctx.initComplete) return;
+    if (!ctx.initComplete) {
+      pendingEvents.push({ type: 'updated', tabId, changeInfo, tab: _tab });
+      return;
+    }
     const state = context.state;
     // Filter: only act on relevant changes
     const hasRelevant = Object.keys(changeInfo).some((key) =>
@@ -232,6 +244,33 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
     broadcastState();
   }
 
+  /**
+   * Replays events that were buffered while init was in progress.
+   * Called once after reconciliation completes and ctx.initComplete = true.
+   * Skips created/updated events for tabs already handled by reconciliation.
+   */
+  function drainPendingEvents() {
+    while (pendingEvents.length > 0) {
+      const evt = pendingEvents.shift();
+      switch (evt.type) {
+        case 'created':
+          // Only process if not already captured by reconciliation
+          if (!context.state.tabs.has(evt.tab.id)) {
+            onCreated(evt.tab);
+          }
+          break;
+        case 'removed':
+          onRemoved(evt.tabId, evt.removeInfo);
+          break;
+        case 'updated':
+          if (context.state.tabs.has(evt.tabId)) {
+            onUpdated(evt.tabId, evt.changeInfo, evt.tab);
+          }
+          break;
+      }
+    }
+  }
+
   return {
     onCreated,
     onRemoved,
@@ -245,5 +284,6 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
     onGroupUpdated,
     onGroupRemoved,
     onWindowFocusChanged,
+    drainPendingEvents,
   };
 }

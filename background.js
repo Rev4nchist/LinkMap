@@ -85,10 +85,44 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const windowIdMap = context.state.reconcileWithLiveTabs(liveTabs);
+    const { windowIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
+
+    // 3d. Schedule deferred re-reconciliation if matching quality was poor
+    if (savedData && stats && stats.savedRelationships > 0 && stats.survivingRelationships < stats.savedRelationships * 0.7) {
+      console.log('[LinkMap] Poor reconciliation quality — scheduling retry in 2s');
+      setTimeout(async () => {
+        try {
+          const retryLiveTabs = await chrome.tabs.query({});
+          const retryState = ShadowState.fromStorage(savedData);
+          const { stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
+
+          // Only swap if retry preserved MORE relationships
+          if (retryStats.survivingRelationships > stats.survivingRelationships) {
+            console.log('[LinkMap] Retry improved reconciliation:', JSON.stringify(retryStats));
+            context.state = retryState;
+
+            // Re-run group reconciliation
+            const retryGroups = await chrome.tabGroups.query({});
+            const retryGroupCounts = new Map();
+            for (const [, tab] of retryState.tabs) {
+              const gid = tab.groupId;
+              if (gid && gid !== -1) retryGroupCounts.set(gid, (retryGroupCounts.get(gid) || 0) + 1);
+            }
+            context.state.reconcileWithLiveGroups(retryGroups, retryGroupCounts, retryStats.windowIdMap || new Map());
+
+            saveState();
+            broadcastState();
+          } else {
+            console.log('[LinkMap] Retry did not improve — keeping original');
+          }
+        } catch (err) {
+          console.error('[LinkMap] Retry reconciliation failed:', err);
+        }
+      }, 2000);
+    }
 
     // 3b. Query all live tab groups and reconcile
     const liveGroups = await chrome.tabGroups.query({});
@@ -134,6 +168,7 @@ async function init() {
     broadcastState();
 
     ctx.initComplete = true;
+    tabEvents.drainPendingEvents();
     context.retryMissingGroupTitles();
     console.log(`[LinkMap] Initialized with ${context.state.tabs.size} tabs, ${context.state.groups.size} groups`);
   } catch (err) {

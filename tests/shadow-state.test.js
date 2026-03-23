@@ -1023,3 +1023,124 @@ describe('windowNames — reconciliation remap', () => {
     assert.equal(s.getWindowName(100), 'Work');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG 4: reconcileWithLiveTabs returns { windowIdMap, stats }
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — return value includes stats', () => {
+  it('returns an object with windowIdMap and stats properties', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const result = s.reconcileWithLiveTabs(liveTabs);
+    assert.ok(result.windowIdMap instanceof Map, 'should have windowIdMap');
+    assert.ok(typeof result.stats === 'object', 'should have stats object');
+  });
+
+  it('stats includes pass counters', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(typeof stats.pass1, 'number');
+    assert.equal(typeof stats.pass2, 'number');
+    assert.equal(typeof stats.pass2b, 'number');
+    assert.equal(typeof stats.pass3, 'number');
+  });
+
+  it('stats pass1 counts same-session ID matches', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2 }));
+    const liveTabs = [
+      makeLiveTab({ id: 1, index: 0 }),
+      makeLiveTab({ id: 2, index: 1 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass1, 2);
+  });
+
+  it('stats pass2 counts URL-matched tabs', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
+    const liveTabs = [
+      makeLiveTab({ id: 501, url: 'https://github.com', title: 'GitHub', index: 0 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass2, 1);
+  });
+
+  it('stats includes savedRelationships and survivingRelationships', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, parentId: null }));
+    s.addTab(2, makeTab({ tabId: 2, parentId: 1 }));
+    const liveTabs = [
+      makeLiveTab({ id: 1, index: 0 }),
+      makeLiveTab({ id: 2, index: 1 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.savedRelationships, 1, 'one saved parent-child');
+    assert.equal(stats.survivingRelationships, 1, 'relationship should survive');
+  });
+
+  it('stats includes savedCount, liveCount, deadRemoved', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.savedCount, 2);
+    assert.equal(stats.liveCount, 1);
+    assert.equal(stats.deadRemoved, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 2: pendingUrl fallback in reconciliation
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — pendingUrl fallback', () => {
+  it('matches live tab by pendingUrl when url is empty', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
+    const liveTabs = [
+      makeLiveTab({ id: 501, url: '', pendingUrl: 'https://github.com', title: 'GitHub', index: 0 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass2, 1, 'should match via pendingUrl in pass 2');
+    assert.ok(s.tabs.has(501), 'remapped tab should exist');
+  });
+
+  it('stores pendingUrl as url when url is empty during update pass', () => {
+    const s = new ShadowState();
+    const liveTabs = [
+      makeLiveTab({ id: 1, url: '', pendingUrl: 'https://loading.com', title: 'Loading', index: 0 }),
+    ];
+    s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(s.tabs.get(1).url, 'https://loading.com');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 1: Pass 3 uses preliminary windowIdMap
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — Pass 3 windowId mapping', () => {
+  it('matches positionally in mapped window after restart', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, windowId: 100, url: 'https://github.com', title: 'GitHub', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, windowId: 100, url: 'https://google.com', title: 'Google', index: 1 }));
+    s.addTab(300, makeTab({ tabId: 300, windowId: 100, url: 'chrome://newtab/', title: 'New Tab', index: 2 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://github.com', title: 'GitHub', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 500, url: 'https://google.com', title: 'Google', index: 1 }),
+      makeLiveTab({ id: 503, windowId: 500, url: 'chrome://newtab/', title: 'New Tab', index: 2 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass3, 1, 'Pass 3 should match generic tab via mapped window');
+    assert.ok(s.tabs.has(503), 'generic tab should be matched');
+  });
+});

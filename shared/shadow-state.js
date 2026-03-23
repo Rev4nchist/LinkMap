@@ -680,6 +680,8 @@ export class ShadowState {
   reconcileWithLiveTabs(liveTabs) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
     const matchedLiveIds = new Set();
+    let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
+    const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
 
     // Snapshot saved windowIds BEFORE they get overwritten at the update pass
     const savedTabWindowIds = new Map();
@@ -691,6 +693,7 @@ export class ShadowState {
     for (const id of this.tabs.keys()) {
       if (liveById.has(id)) {
         matchedLiveIds.add(id);
+        pass1Count++;
       }
     }
 
@@ -707,7 +710,7 @@ export class ShadowState {
     // Build URL index for unmatched live tabs (skip generic URLs)
     const liveByUrl = new Map();
     for (const tab of unmatchedLive) {
-      const url = tab.url || '';
+      const url = tab.url || tab.pendingUrl || '';
       if (!url || url === 'chrome://newtab/' || url === 'about:blank') continue;
       if (!liveByUrl.has(url)) liveByUrl.set(url, []);
       liveByUrl.get(url).push(tab);
@@ -734,6 +737,7 @@ export class ShadowState {
       // Remap saved ID to live ID — preserves tree structure
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
+      pass2Count++;
 
       // Propagate saved windowId to new tab ID so vote-counting can build windowIdMap
       const oldWid = savedTabWindowIds.get(savedId);
@@ -771,10 +775,31 @@ export class ShadowState {
       }
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
+      pass2bCount++;
       const oldWid2b = savedTabWindowIds.get(savedId);
       if (oldWid2b !== undefined) savedTabWindowIds.set(best.id, oldWid2b);
       const idx = candidates.indexOf(best);
       if (idx !== -1) candidates.splice(idx, 1);
+    }
+
+    // Build preliminary windowIdMap from Pass 1 + 2 + 2b matches for Pass 3
+    const prelimWindowVotes = new Map();
+    for (const liveTab of liveTabs) {
+      if (!matchedLiveIds.has(liveTab.id)) continue;
+      const savedWid = savedTabWindowIds.get(liveTab.id);
+      if (savedWid !== undefined && savedWid !== liveTab.windowId) {
+        if (!prelimWindowVotes.has(savedWid)) prelimWindowVotes.set(savedWid, new Map());
+        const votes = prelimWindowVotes.get(savedWid);
+        votes.set(liveTab.windowId, (votes.get(liveTab.windowId) || 0) + 1);
+      }
+    }
+    const prelimWindowIdMap = new Map();
+    for (const [oldWid, votes] of prelimWindowVotes) {
+      let bestWid = oldWid, bestCount = 0;
+      for (const [newWid, count] of votes) {
+        if (count > bestCount) { bestCount = count; bestWid = newWid; }
+      }
+      prelimWindowIdMap.set(oldWid, bestWid);
     }
 
     // Pass 3: Positional matching for generic/remaining unmatched tabs
@@ -794,7 +819,8 @@ export class ShadowState {
       }
     }
     for (const [savedId, savedNode] of unmatchedSavedP3) {
-      const windowTabs = liveByWindow.get(savedNode.windowId);
+      const mappedWid = prelimWindowIdMap.get(savedNode.windowId) ?? savedNode.windowId;
+      const windowTabs = liveByWindow.get(mappedWid);
       if (!windowTabs || windowTabs.length === 0) continue;
       let bestIdx = 0;
       let bestDist = Math.abs(windowTabs[0].index - savedNode.index);
@@ -806,6 +832,7 @@ export class ShadowState {
         const matchedLiveTab = windowTabs[bestIdx];
         this.replaceTabId(savedId, matchedLiveTab.id);
         matchedLiveIds.add(matchedLiveTab.id);
+        pass3Count++;
         const oldWid3 = savedTabWindowIds.get(savedId);
         if (oldWid3 !== undefined) savedTabWindowIds.set(matchedLiveTab.id, oldWid3);
         windowTabs.splice(bestIdx, 1);
@@ -851,7 +878,7 @@ export class ShadowState {
     for (const tab of liveTabs) {
       const changes = {
         title:      tab.title,
-        url:        tab.url,
+        url:        tab.url || tab.pendingUrl || '',
         favIconUrl: tab.favIconUrl ?? '',
         pinned:     tab.pinned,
         audible:    tab.audible,
@@ -890,7 +917,18 @@ export class ShadowState {
     }
     this.windowNames = remappedNames;
 
-    return windowIdMap;
+    const survivingRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
+    const stats = {
+      savedCount: savedTabWindowIds.size,
+      liveCount: liveTabs.length,
+      pass1: pass1Count, pass2: pass2Count, pass2b: pass2bCount, pass3: pass3Count,
+      deadRemoved: deadIds.length,
+      savedRelationships,
+      survivingRelationships,
+    };
+    console.log('[LinkMap] Reconciliation:', JSON.stringify(stats));
+
+    return { windowIdMap, stats };
   }
 
   /**
