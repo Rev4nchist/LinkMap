@@ -456,6 +456,19 @@
   letter-spacing: 0.5px;
 }
 
+/* Multi-window pinned tab group labels */
+.pinned-window-group {
+  padding: 2px 0;
+}
+
+.pinned-window-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 0 8px;
+}
+
 /* Per-window pinned tab bar (multi-window mode) */
 .window-pinned-bar {
   display: flex;

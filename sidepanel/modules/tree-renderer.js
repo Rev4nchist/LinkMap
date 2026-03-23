@@ -118,11 +118,8 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
       // Skip tabs for collapsed non-home windows
       if (isCollapsed) continue;
 
-      // Per-window pinned tabs (only in multi-window mode)
-      const windowPinned = pinnedByWindow.get(wid) || [];
-      if (windowPinned.length > 0) {
-        treeElements.push(buildPinnedBar(windowPinned, tabs, wid));
-      }
+      // Pinned tabs no longer rendered inline in the tree scroller;
+      // they are always rendered into pinnedContainer (sticky) below.
     }
 
     // Pre-compute group member counts for this window
@@ -166,20 +163,40 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
   // Swap DOM content — keyed reconciliation preserves scroll + DOM state
   const scrollTop = container.scrollTop;
 
-  // Populate global pinned bar only for single-window mode;
-  // in multi-window mode, pinned tabs render inline within each window section.
+  // Always render pinned tabs into pinnedContainer (outside the scroller, sticky).
+  const pinnedElements = [];
   if (sortedWindowIds.length <= 1) {
-    const pinnedElements = [];
+    // Single window: flat pinned tiles
     for (const ids of pinnedByWindow.values()) {
       for (const id of ids) {
         const tab = tabs[id];
         if (tab) pinnedElements.push(buildPinnedTab(tab));
       }
     }
-    pinnedContainer.replaceChildren(...pinnedElements);
   } else {
-    pinnedContainer.replaceChildren(); // clear global bar in multi-window mode
+    // Multi-window: per-window pinned groups with labels
+    for (const wid of sortedWindowIds) {
+      const windowPinned = pinnedByWindow.get(wid) || [];
+      if (windowPinned.length === 0) continue;
+
+      const isHome = wid === homeWindowId;
+      const homeLabel = windowNames && windowNames[homeWindowId];
+      const label = isHome ? (homeLabel || 'This Window') : windowLabels.get(wid);
+
+      const group = el('div', { className: 'pinned-window-group', dataset: { windowId: String(wid) } });
+      const labelEl = el('div', { className: 'pinned-window-label' }, label);
+      group.appendChild(labelEl);
+
+      const bar = el('div', { className: 'window-pinned-bar' });
+      for (const id of windowPinned) {
+        const tab = tabs[id];
+        if (tab) bar.appendChild(buildPinnedTab(tab));
+      }
+      group.appendChild(bar);
+      pinnedElements.push(group);
+    }
   }
+  pinnedContainer.replaceChildren(...pinnedElements);
   reconcileChildren(container, treeElements);
 
   container.scrollTop = scrollTop;
