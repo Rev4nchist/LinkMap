@@ -704,7 +704,7 @@ describe('renderTree', () => {
           'pinnedContainer should have pinned tab content in multi-window mode');
       });
 
-      it('renders per-window pinned groups with labels into pinnedContainer', () => {
+      it('renders home window pinned tabs flat in pinnedList; non-home pinned bar in container', () => {
         const state = makeState({
           tabs: {
             1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -718,41 +718,44 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        // Should have per-window pinned groups in pinnedContainer
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        assert.equal(groups.length, 2,
-          'should have 2 pinned-window-group elements (one per window)');
+        // Home window (100): pinned tabs render flat directly in pinnedList
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1,
+          'pinnedList should have 1 flat pinned-tab for the home window');
+        assert.equal(homePinnedTabs[0].dataset.tabId, '1');
 
-        // Each group should have a label and a pinned bar
-        for (const group of groups) {
-          const labels = findAll(group, 'pinned-window-label');
-          assert.equal(labels.length, 1, 'each group should have a label');
-          const bars = findAll(group, 'window-pinned-bar');
-          assert.equal(bars.length, 1, 'each group should have a pinned bar');
-        }
-      });
-
-      it('does NOT render pinned bars into the tree container (scroller)', () => {
-        const state = makeState({
-          tabs: {
-            1: makeTabNode(1, { pinned: true, windowId: 100 }),
-            2: makeTabNode(2, { pinned: false, windowId: 100 }),
-            3: makeTabNode(3, { pinned: true, windowId: 200 }),
-            4: makeTabNode(4, { pinned: false, windowId: 200 }),
-          },
-          rootIds: [1, 2, 3, 4],
-        });
-        const { container, pinnedList } = makeContainers();
-
-        renderTree(state, null, container, pinnedList, 100, new Set());
-
-        // Tree container should NOT have any pinned bars
+        // Non-home window (200): pinned tab renders as window-pinned-bar inside container
         const inlineBars = findAll(container, 'window-pinned-bar');
-        assert.equal(inlineBars.length, 0,
-          'tree container (scroller) should have no inline pinned bars');
+        assert.equal(inlineBars.length, 1,
+          'container should have 1 window-pinned-bar for the non-home window');
       });
 
-      it('uses correct window labels for pinned groups', () => {
+      it('renders non-home window pinned bars inline in the tree container (scroller)', () => {
+        const state = makeState({
+          tabs: {
+            1: makeTabNode(1, { pinned: true, windowId: 100 }),
+            2: makeTabNode(2, { pinned: false, windowId: 100 }),
+            3: makeTabNode(3, { pinned: true, windowId: 200 }),
+            4: makeTabNode(4, { pinned: false, windowId: 200 }),
+          },
+          rootIds: [1, 2, 3, 4],
+        });
+        const { container, pinnedList } = makeContainers();
+
+        renderTree(state, null, container, pinnedList, 100, new Set());
+
+        // Non-home window (200) pinned tab renders inline in the tree container
+        const inlineBars = findAll(container, 'window-pinned-bar');
+        assert.equal(inlineBars.length, 1,
+          'tree container should have 1 inline pinned bar for the non-home window');
+
+        // Home window (100) pinned tab renders flat in pinnedList, NOT directly in container
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1,
+          'home window pinned tab should be in pinnedList, not the tree container');
+      });
+
+      it('home pinned tab renders flat in pinnedList; non-home pinned bar renders in container', () => {
         const state = makeState({
           tabs: {
             1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -767,27 +770,17 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        assert.equal(groups.length, 2);
+        // Home window (100): flat pinned-tab in pinnedList
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1, 'home window should have 1 flat pinned-tab in pinnedList');
+        assert.equal(homePinnedTabs[0].dataset.tabId, '1');
 
-        // Home window group should use user-assigned name 'Dev'
-        const homeGroup = groups.find(g => g.dataset.windowId === '100');
-        assert.ok(homeGroup, 'should find group for home window');
-        const homeLabel = findAll(homeGroup, 'pinned-window-label')[0];
-        assert.ok(homeLabel.textContent.includes('Dev') ||
-          homeLabel.childNodes.some(n => n.textContent === 'Dev'),
-          `home window label should be 'Dev'`);
-
-        // Non-home window group should use fallback 'Window 1'
-        const otherGroup = groups.find(g => g.dataset.windowId === '200');
-        assert.ok(otherGroup, 'should find group for window 200');
-        const otherLabel = findAll(otherGroup, 'pinned-window-label')[0];
-        const otherText = otherLabel.textContent || otherLabel.childNodes.map(n => n.textContent).join('');
-        assert.ok(otherText.includes('Window 1'),
-          `non-home window label should be 'Window 1', got: '${otherText}'`);
+        // Non-home window (200): window-pinned-bar in container
+        const inlineBars = findAll(container, 'window-pinned-bar');
+        assert.equal(inlineBars.length, 1, 'container should have 1 window-pinned-bar for non-home window');
       });
 
-      it('uses "This Window" label when home window has no name', () => {
+      it('home window pinned tabs render flat in pinnedList when home window has no name', () => {
         const state = makeState({
           tabs: {
             1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -802,16 +795,17 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        const homeGroup = groups.find(g => g.dataset.windowId === '100');
-        assert.ok(homeGroup);
-        const homeLabel = findAll(homeGroup, 'pinned-window-label')[0];
-        const labelText = homeLabel.textContent || homeLabel.childNodes.map(n => n.textContent).join('');
-        assert.ok(labelText.includes('This Window'),
-          `home window label should be 'This Window', got: '${labelText}'`);
+        // Home window: flat pinned-tab directly in pinnedList (no group wrapper)
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1, 'home window should have 1 flat pinned-tab in pinnedList');
+        assert.equal(homePinnedTabs[0].dataset.tabId, '1');
+
+        // Non-home window: pinned bar inside container
+        const inlineBars = findAll(container, 'window-pinned-bar');
+        assert.equal(inlineBars.length, 1, 'non-home window should have pinned bar in container');
       });
 
-      it('assigns correct pinned tabs to each window group', () => {
+      it('assigns correct pinned tabs to each location (home flat in pinnedList, non-home bar in container)', () => {
         const state = makeState({
           tabs: {
             10: makeTabNode(10, { pinned: true, windowId: 100, title: 'Pinned W1' }),
@@ -826,25 +820,22 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        assert.equal(groups.length, 2);
+        // Home window (100): 1 flat pinned-tab directly in pinnedList
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1, 'window 100 should have 1 flat pinned-tab in pinnedList');
+        assert.equal(homePinnedTabs[0].dataset.tabId, '10');
 
-        // First window (home, windowId 100) should have 1 pinned tab
-        const homeGroup = groups.find(g => g.dataset.windowId === '100');
-        const bar1Pinned = findAll(homeGroup, 'pinned-tab');
-        assert.equal(bar1Pinned.length, 1, 'window 100 should have 1 pinned tab');
-        assert.equal(bar1Pinned[0].dataset.tabId, '10');
-
-        // Second window (windowId 200) should have 2 pinned tabs
-        const otherGroup = groups.find(g => g.dataset.windowId === '200');
-        const bar2Pinned = findAll(otherGroup, 'pinned-tab');
-        assert.equal(bar2Pinned.length, 2, 'window 200 should have 2 pinned tabs');
+        // Non-home window (200): window-pinned-bar in container with 2 pinned tabs
+        const inlineBars = findAll(container, 'window-pinned-bar');
+        assert.equal(inlineBars.length, 1, 'window 200 should have 1 window-pinned-bar in container');
+        const bar2Pinned = findAll(inlineBars[0], 'pinned-tab');
+        assert.equal(bar2Pinned.length, 2, 'window 200 bar should have 2 pinned tabs');
         const bar2Ids = bar2Pinned.map(p => p.dataset.tabId);
         assert.ok(bar2Ids.includes('20'), 'window 200 bar should contain tab 20');
         assert.ok(bar2Ids.includes('21'), 'window 200 bar should contain tab 21');
       });
 
-      it('does not render pinned group for window with no pinned tabs', () => {
+      it('does not render pinned bar for window with no pinned tabs', () => {
         const state = makeState({
           tabs: {
             1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -857,10 +848,14 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        // Only 1 group (for window 100 which has a pinned tab)
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        assert.equal(groups.length, 1,
-          'only window with pinned tabs should have a pinned group');
+        // Home window (100) has a pinned tab — renders flat in pinnedList
+        const homePinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(homePinnedTabs.length, 1, 'home window should have 1 flat pinned-tab');
+
+        // Non-home window (200) has no pinned tabs — no window-pinned-bar in container
+        const inlineBars = findAll(container, 'window-pinned-bar');
+        assert.equal(inlineBars.length, 0,
+          'window without pinned tabs should have no pinned bar in container');
       });
 
       it('still renders pinned tab children in the tree', () => {
@@ -883,7 +878,7 @@ describe('renderTree', () => {
           'non-pinned child of pinned parent should still render in tree');
       });
 
-      it('uses buildPinnedTab format for pinned elements in groups', () => {
+      it('uses buildPinnedTab format for home window pinned tab in pinnedList', () => {
         const state = makeState({
           tabs: {
             1: makeTabNode(1, { pinned: true, windowId: 100, favIconUrl: 'https://example.com/icon.png' }),
@@ -896,12 +891,10 @@ describe('renderTree', () => {
 
         renderTree(state, null, container, pinnedList, 100, new Set());
 
-        const groups = findAll(pinnedList, 'pinned-window-group');
-        assert.equal(groups.length, 1);
-
-        // The pinned tab inside the bar should use buildPinnedTab format
-        const pinnedTab = findAll(groups[0], 'pinned-tab')[0];
-        assert.ok(pinnedTab, 'pinned group should contain .pinned-tab elements');
+        // Home window pinned tab renders flat in pinnedList
+        const pinnedTabs = findAll(pinnedList, 'pinned-tab');
+        assert.equal(pinnedTabs.length, 1, 'pinnedList should have 1 flat pinned-tab');
+        const pinnedTab = pinnedTabs[0];
         assert.equal(pinnedTab.dataset.tabId, '1');
 
         // Should have favicon img
@@ -916,10 +909,10 @@ describe('renderTree', () => {
   // ---------------------------------------------------------------------------
 
   describe('pinned bar reconciliation', () => {
-    it('updates pinned groups when a new tab is pinned', () => {
+    it('updates pinned tabs in pinnedList when a new tab is pinned', () => {
       const { container, pinnedList } = makeContainers();
 
-      // Initial: 1 pinned tab in window 100
+      // Initial: 1 pinned tab in home window 100 (flat in pinnedList)
       const state1 = makeState({
         tabs: {
           1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -930,9 +923,8 @@ describe('renderTree', () => {
       });
       renderTree(state1, null, container, pinnedList, 100, new Set());
 
-      const groups1 = findAll(pinnedList, 'pinned-window-group');
-      assert.equal(groups1.length, 1, 'should have 1 pinned group');
-      assert.equal(findAll(groups1[0], 'pinned-tab').length, 1, 'group should have 1 pinned tab');
+      const pinnedTabs1 = findAll(pinnedList, 'pinned-tab');
+      assert.equal(pinnedTabs1.length, 1, 'should have 1 flat pinned-tab in pinnedList');
 
       // Now pin tab 2 as well
       const state2 = makeState({
@@ -945,16 +937,14 @@ describe('renderTree', () => {
       });
       renderTree(state2, null, container, pinnedList, 100, new Set());
 
-      const groups2 = findAll(pinnedList, 'pinned-window-group');
-      assert.equal(groups2.length, 1, 'should still have 1 pinned group');
-      const pinnedTabs = findAll(groups2[0], 'pinned-tab');
-      assert.equal(pinnedTabs.length, 2, 'group should now have 2 pinned tabs');
+      const pinnedTabs2 = findAll(pinnedList, 'pinned-tab');
+      assert.equal(pinnedTabs2.length, 2, 'pinnedList should now have 2 flat pinned-tabs');
     });
 
-    it('removes pinned tab icon when a pinned tab is closed', () => {
+    it('removes pinned tab icon from pinnedList when a pinned tab is closed', () => {
       const { container, pinnedList } = makeContainers();
 
-      // Initial: 2 pinned tabs in window 100
+      // Initial: 2 pinned tabs in home window 100 (flat in pinnedList)
       const state1 = makeState({
         tabs: {
           1: makeTabNode(1, { pinned: true, windowId: 100 }),
@@ -965,7 +955,8 @@ describe('renderTree', () => {
       });
       renderTree(state1, null, container, pinnedList, 100, new Set());
 
-      assert.equal(findAll(findAll(pinnedList, 'pinned-window-group')[0], 'pinned-tab').length, 2);
+      assert.equal(findAll(pinnedList, 'pinned-tab').length, 2,
+        'should have 2 flat pinned-tabs initially');
 
       // Close tab 2 (remove it from state)
       const state2 = makeState({
@@ -977,10 +968,8 @@ describe('renderTree', () => {
       });
       renderTree(state2, null, container, pinnedList, 100, new Set());
 
-      const groups = findAll(pinnedList, 'pinned-window-group');
-      assert.equal(groups.length, 1);
-      const pinnedTabs = findAll(groups[0], 'pinned-tab');
-      assert.equal(pinnedTabs.length, 1, 'group should have 1 pinned tab after close');
+      const pinnedTabs = findAll(pinnedList, 'pinned-tab');
+      assert.equal(pinnedTabs.length, 1, 'should have 1 flat pinned-tab after close');
       assert.equal(pinnedTabs[0].dataset.tabId, '1', 'remaining tab should be tab 1');
     });
 
@@ -997,7 +986,8 @@ describe('renderTree', () => {
         rootIds: [1, 2, 3],
       });
       renderTree(state1, null, container, pinnedList, 100, new Set());
-      assert.equal(findAll(findAll(pinnedList, 'pinned-window-group')[0], 'pinned-tab').length, 1);
+      // Home window pinned tabs render flat (no group wrapper)
+      assert.equal(findAll(pinnedList, 'pinned-tab').length, 1);
 
       // Unpin tab 1, pin tab 2
       const state2 = makeState({
@@ -1010,10 +1000,8 @@ describe('renderTree', () => {
       });
       renderTree(state2, null, container, pinnedList, 100, new Set());
 
-      const groups = findAll(pinnedList, 'pinned-window-group');
-      assert.equal(groups.length, 1);
-      const pinnedTabs = findAll(groups[0], 'pinned-tab');
-      assert.equal(pinnedTabs.length, 1, 'group should have 1 pinned tab');
+      const pinnedTabs = findAll(pinnedList, 'pinned-tab');
+      assert.equal(pinnedTabs.length, 1, 'should have 1 pinned tab for home window');
       assert.equal(pinnedTabs[0].dataset.tabId, '2', 'pinned tab should be tab 2');
 
       // Unpin all — groups should disappear
@@ -1027,8 +1015,8 @@ describe('renderTree', () => {
       });
       renderTree(state3, null, container, pinnedList, 100, new Set());
 
-      const groupsAfter = findAll(pinnedList, 'pinned-window-group');
-      assert.equal(groupsAfter.length, 0, 'no pinned groups when no tabs are pinned');
+      const pinnedTabsAfter = findAll(pinnedList, 'pinned-tab');
+      assert.equal(pinnedTabsAfter.length, 0, 'no pinned tabs in pinnedList when no tabs are pinned');
     });
   });
 
