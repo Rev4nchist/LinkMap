@@ -97,7 +97,7 @@ async function init() {
         try {
           const retryLiveTabs = await chrome.tabs.query({});
           const retryState = ShadowState.fromStorage(savedData);
-          const { stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
+          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
 
           // Only swap if retry preserved MORE relationships
           if (retryStats.survivingRelationships > stats.survivingRelationships) {
@@ -111,7 +111,7 @@ async function init() {
               const gid = tab.groupId;
               if (gid && gid !== -1) retryGroupCounts.set(gid, (retryGroupCounts.get(gid) || 0) + 1);
             }
-            context.state.reconcileWithLiveGroups(retryGroups, retryGroupCounts, retryStats.windowIdMap || new Map());
+            context.state.reconcileWithLiveGroups(retryGroups, retryGroupCounts, retryWindowIdMap);
 
             saveState();
             broadcastState();

@@ -874,6 +874,24 @@ export class ShadowState {
       windowIdMap.set(oldWid, bestWid);
     }
 
+    // Fallback: ensure every saved window name has a windowId mapping.
+    // If a window's tabs all failed to match, the vote-based map won't have it.
+    // Scan savedTabWindowIds for any tab that was in the unmapped window.
+    const liveWindowIds = new Set(liveTabs.map(t => t.windowId));
+    for (const oldWid of this.windowNames.keys()) {
+      if (windowIdMap.has(oldWid)) continue; // already mapped
+      if (liveWindowIds.has(oldWid)) continue; // ID didn't change
+
+      // Find any matched live tab that was in this old window
+      for (const liveTab of liveTabs) {
+        const savedWid = savedTabWindowIds.get(liveTab.id);
+        if (savedWid === oldWid) {
+          windowIdMap.set(oldWid, liveTab.windowId);
+          break;
+        }
+      }
+    }
+
     // (b) Update existing / add new.
     for (const tab of liveTabs) {
       const changes = {
@@ -916,6 +934,10 @@ export class ShadowState {
       remappedNames.set(newWid, name);
     }
     this.windowNames = remappedNames;
+    console.log('[LinkMap] Window name remap:', JSON.stringify({
+      windowIdMap: Object.fromEntries(windowIdMap),
+      names: Object.fromEntries(this.windowNames),
+    }));
 
     const survivingRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
     const stats = {

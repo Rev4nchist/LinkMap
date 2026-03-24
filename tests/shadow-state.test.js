@@ -1010,6 +1010,28 @@ describe('windowNames — reconciliation remap', () => {
     assert.equal(s.getWindowName(20), null);
   });
 
+  it('remaps window name via fallback when vote-based mapping misses a window', () => {
+    const s = new ShadowState();
+    // Window 100 has 1 tab, window 200 has 1 tab
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://a.com' }));
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://b.com' }));
+    s.setWindowName(100, 'Primary');
+    s.setWindowName(200, 'Secondary');
+
+    // After restart: both windows get new IDs
+    // Tab from window 200 matches, tab from window 100 also matches
+    const liveTabs = [
+      { id: 50, url: 'https://a.com', title: '', windowId: 500, index: 0, pinned: false, audible: false, status: 'complete' },
+      { id: 51, url: 'https://b.com', title: '', windowId: 600, index: 0, pinned: false, audible: false, status: 'complete' },
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    // Both names should survive under new window IDs
+    assert.equal(s.getWindowName(500), 'Primary');
+    assert.equal(s.getWindowName(600), 'Secondary');
+  });
+
   it('preserves window names when windowIds do not change', () => {
     const s = new ShadowState();
     s.addTab(1, makeTab({ tabId: 1, windowId: 100 }));
