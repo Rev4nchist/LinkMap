@@ -8,6 +8,10 @@
 
 
 ## Completed
+- [x] [fix] window name lost for secondary window after Chrome restart (#9) (2026-03-24) `5fe1084`
+- [x] [fix] sticky pinned tabs show only current window's pins (#8) (2026-03-23) `9ce9399`
+- [x] [fix] use removeAttribute instead of delete on NamedNodeMap (2026-03-23) `937269e`
+- [x] [feat] sticky pinned tabs in multi-window mode (#8) (2026-03-23) `8a21f87`
 - [x] [fix] preserve branch relationships across Chrome restart (#7) (2026-03-23) `b3210d0`
 - [x] Vertical tabs panel (2026-03-23)
 - [x] Core extension scaffold (2026-03-23)
