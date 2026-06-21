@@ -251,7 +251,27 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
         try { await chrome.tabs.remove(tabId); } catch (e) { /* may already be gone */ }
       }
 
-      // 3. Rebuild tree structure
+      // 3. Rebuild tree structure.
+      //
+      // FM-1: seed every restored tab into Shadow State authoritatively, rather
+      // than depending on the async onCreated listener to have added them first.
+      // addTab is idempotent (its duplicate guard makes a later onCreated a
+      // no-op), so the reparent loop below always runs against nodes that exist
+      // — no race, no silent flatten.
+      for (const savedTab of savedTabs) {
+        const newId = oldToNewId.get(savedTab.tabId);
+        if (!newId) continue;
+        getState().addTab(newId, {
+          parentId: null,
+          title: savedTab.title,
+          url: savedTab.url,
+          favIconUrl: savedTab.favIconUrl,
+          pinned: savedTab.pinned,
+          index: savedTab.index,
+          windowId: newTabWindowId.get(newId) ?? savedTab.windowId,
+        });
+      }
+
       const childrenByParent = new Map();
       for (const savedTab of savedTabs) {
         const newId = oldToNewId.get(savedTab.tabId);
@@ -271,6 +291,12 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
         for (const child of children) {
           getState().moveTab(child.newId, parentId, Infinity);
         }
+      }
+
+      // FM-2: re-apply the saved collapsed state, remapped to the new tab IDs.
+      for (const oldId of session.data.collapsed || []) {
+        const newId = oldToNewId.get(oldId);
+        if (newId != null) getState().collapsed.add(newId);
       }
 
       // 4. Recreate Chrome tab groups
