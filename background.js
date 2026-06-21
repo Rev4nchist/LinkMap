@@ -102,6 +102,26 @@ async function init() {
           // Only swap if retry preserved MORE relationships
           if (retryStats.survivingRelationships > stats.survivingRelationships) {
             console.log('[LinkMap] Retry improved reconciliation:', JSON.stringify(retryStats));
+
+            // SW-3/RR-7: once initComplete is true, buffering is off and live tab
+            // events mutate context.state directly during this 2s window. retryState
+            // is rebuilt from the original snapshot, so a wholesale swap would drop
+            // those interim edits. Carry over the lineage and collapsed state the
+            // live state established (re-parents from openerTabId, panel collapses)
+            // before swapping.
+            const liveState = context.state;
+            for (const [id, liveNode] of liveState.tabs) {
+              const retryNode = retryState.tabs.get(id);
+              if (!retryNode) continue;
+              if (liveNode.parentId != null && retryNode.parentId == null
+                  && retryState.tabs.has(liveNode.parentId)) {
+                retryState.moveTab(id, liveNode.parentId, Infinity);
+              }
+            }
+            for (const cid of liveState.collapsed) {
+              if (retryState.tabs.has(cid)) retryState.collapsed.add(cid);
+            }
+
             context.state = retryState;
 
             // Re-run group reconciliation

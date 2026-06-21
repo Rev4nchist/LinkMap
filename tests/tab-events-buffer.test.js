@@ -308,4 +308,32 @@ describe('tab-events: buffers all lifecycle events during init (SW-2)', () => {
     handlers.onActivated({ tabId: 42 });
     assert.equal(context.ctx.activeTabId, 42, 'active tab recorded even pre-init');
   });
+
+  it('buffers and replays onDetached', () => {
+    state.addTab(82, { tabId: 82, windowId: 1, children: [] });
+    handlers.onDetached(82, { oldWindowId: 1, oldPosition: 0 });
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    // onDetached only logs/commits — assert the buffered event drained cleanly.
+    assert.ok(state.tabs.has(82), 'tab unaffected; detached event drained without error');
+  });
+
+  it('drain skips a buffered groupCreated when reconciliation already created the group', () => {
+    handlers.onGroupCreated({ id: 9, title: 'Buffered', color: 'red' });
+    // Reconciliation creates the same group id with the correct title.
+    state.addGroup({ id: 9, title: 'Reconciled', color: 'red' });
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.groups.get(9).title, 'Reconciled', 'reconciled group not clobbered on replay');
+  });
+
+  it('drain applies a buffered groupUpdated only when the group still exists', () => {
+    state.addGroup({ id: 12, title: 'Old', color: 'blue' });
+    handlers.onGroupUpdated({ id: 12, title: 'New', color: 'blue' }); // exists → applies
+    handlers.onGroupUpdated({ id: 13, title: 'Ghost', color: 'blue' }); // missing → skipped
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.groups.get(12).title, 'New', 'existing group updated on replay');
+    assert.equal(state.groups.has(13), false, 'no phantom group upserted on replay');
+  });
 });

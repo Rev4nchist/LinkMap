@@ -11,7 +11,7 @@
 - **TDD:** for every behavioral fix, add a failing test first (Node built-in runner,
   `tests/*.test.js`), then implement, then `node --test "tests/*.test.js"` green.
 - **No build step / vanilla ESM** — keep it that way. No new deps.
-- **Keep the suite green at every commit.** Baseline: 369 passing.
+- **Keep the suite green at every commit.** Baseline: 369 passing (393 after this PR's fixes).
 - **Commit per cluster** so each fix is reviewable and revertable.
 
 ## Sequencing rationale
@@ -58,7 +58,7 @@ restart scenario (ids reassigned, windowIds changed):
 - A named window whose tabs all died → name dropped, never misattributed (RR-4).
 
 **Risk:** medium — this is the most-patched code. Mitigate by adding tests first and
-keeping each sub-change a separate commit; the existing 369 tests are the regression net.
+keeping each sub-change a separate commit; the existing 393 tests are the regression net.
 
 ### P0-B · Tree-integrity invariants (`shared/shadow-state.js` + `tree-renderer.js`)
 Covers **TI-2, TI-1, TI-3** + gap #2 (panel-side cycle).
@@ -177,7 +177,7 @@ helper right and tested before wiring it in.
 ## Verification checklist (per cluster)
 
 - [ ] Failing test written first, then made green.
-- [ ] `node --test "tests/*.test.js"` — full suite green (≥369).
+- [ ] `node --test "tests/*.test.js"` — full suite green (≥393).
 - [ ] No new `console.error` in a manual load-unpacked smoke (reconcile a restart,
       drag/reorder, restore a session, switch theme).
 - [ ] Diff is minimal and scoped to the cluster.

@@ -1715,7 +1715,10 @@ describe('Track C: restore reattaches lineage and collapsed state (FM-1/FM-2)', 
     listener({ type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } }, {}, () => {});
     await new Promise((r) => setTimeout(r, 500));
 
-    // Created ids are deterministic: 10->1000, 11->1001, 20->1002, 21->1003.
+    // Created ids are deterministic: restore iterates Object.values(session.data.tabs)
+    // and V8 returns integer-like object keys in ascending numeric order (10,11,20,21),
+    // while the chrome mock assigns ids sequentially from 1000 — so 10->1000, 11->1001,
+    // 20->1002, 21->1003.
     let state;
     listener({ type: 'GET_STATE' }, {}, (resp) => { state = resp; });
     await new Promise((r) => setTimeout(r, 100));

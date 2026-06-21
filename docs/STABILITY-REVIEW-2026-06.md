@@ -6,7 +6,8 @@
 
 ## 1. Executive Summary
 
-LinkMap is in good shape: **369 tests pass**, the architecture (service-worker-owned
+LinkMap is in good shape: **369 tests pass** at review time (393 after the fixes
+in this PR), the architecture (service-worker-owned
 Shadow State + dumb side-panel renderer + debounced `chrome.storage.local`) is sound,
 and the team has already fought several rounds of the hardest problem — cross-restart
 reconciliation. This review went looking for what's left.
@@ -36,7 +37,8 @@ exactly the user this product targets.
 This review was executed as a multi-agent workflow so coverage was broad and every
 claim was independently checked:
 
-1. **Baseline** — ran the full suite (`node --test "tests/*.test.js"`): 369 pass / 0 fail.
+1. **Baseline** — ran the full suite (`node --test "tests/*.test.js"`): 369 pass / 0 fail
+   (the pre-fix baseline; the fixes in this PR bring it to 393).
    Mapped the architecture from `ARCHITECTURE.md`, the PRD, and a direct read of the
    reconciliation core (`shadow-state.js`).
 2. **Fan-out (10 reviewers)** — one specialist per orthogonal dimension, each reading

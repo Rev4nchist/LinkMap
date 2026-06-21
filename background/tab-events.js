@@ -309,10 +309,13 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
           onReplaced(evt.addedTabId, evt.removedTabId);
           break;
         case 'groupCreated':
-          onGroupCreated(evt.group);
+          // Skip if reconciliation already created the group (mirrors 'created').
+          if (!context.state.groups.has(evt.group.id)) onGroupCreated(evt.group);
           break;
         case 'groupUpdated':
-          onGroupUpdated(evt.group);
+          // Only update a group that still exists, to avoid upserting a phantom
+          // (mirrors 'updated').
+          if (context.state.groups.has(evt.group.id)) onGroupUpdated(evt.group);
           break;
         case 'groupRemoved':
           onGroupRemoved(evt.group);
