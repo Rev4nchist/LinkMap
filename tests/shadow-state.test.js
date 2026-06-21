@@ -1166,3 +1166,93 @@ describe('reconcileWithLiveTabs — Pass 3 windowId mapping', () => {
     assert.ok(s.tabs.has(503), 'generic tab should be matched');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reconciliation hardening (RR-1, RR-2, RR-6, RR-8)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — RR-1: same-URL tabs across windows keep their own subtree', () => {
+  it('does not swap subtrees between duplicate-URL tabs in different windows', () => {
+    const s = new ShadowState();
+    // Window A: dashboard (tab 1) with child A (tab 10).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://dash.com', title: 'Dash', index: 0 }));
+    s.addTab(10, makeTab({ tabId: 10, parentId: 1, windowId: 100, url: 'https://child-a.com', title: 'A', index: 1 }));
+    // Window B: dashboard (tab 2) with child B (tab 20) — identical dashboard URL/title.
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://dash.com', title: 'Dash', index: 0 }));
+    s.addTab(20, makeTab({ tabId: 20, parentId: 2, windowId: 200, url: 'https://child-b.com', title: 'B', index: 1 }));
+
+    // After restart: ids + windowIds reassigned. The window-B dashboard appears
+    // FIRST in the live list, so a naive candidates[0] match would cross-attach.
+    const liveTabs = [
+      makeLiveTab({ id: 601, windowId: 600, url: 'https://dash.com', title: 'Dash', index: 0 }),
+      makeLiveTab({ id: 620, windowId: 600, url: 'https://child-b.com', title: 'B', index: 1 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://child-a.com', title: 'A', index: 1 }),
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://dash.com', title: 'Dash', index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, 501, 'child A stays under its own window dashboard');
+    assert.equal(s.getTab(620)?.parentId, 601, 'child B stays under its own window dashboard');
+    assert.notEqual(s.getTab(510)?.parentId, 601, 'child A is NOT cross-attached to window B');
+  });
+
+  it('matches duplicate-URL tabs in the same window by index', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 0 }));
+    s.addTab(2, makeTab({ tabId: 2, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 3 }));
+    const liveTabs = [
+      makeLiveTab({ id: 51, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 0 }),
+      makeLiveTab({ id: 52, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 3 }),
+    ];
+    s.reconcileWithLiveTabs(liveTabs);
+    assert.ok(s.tabs.has(51) && s.tabs.has(52), 'both live tabs present');
+    assert.ok(!s.tabs.has(1) && !s.tabs.has(2), 'saved ids remapped, not duplicated');
+  });
+});
+
+describe('reconcileWithLiveTabs — RR-2: lineage-bearing nodes are not positionally guessed', () => {
+  it('re-roots a surviving child instead of attaching it to an unrelated nearby tab', () => {
+    const s = new ShadowState();
+    // Parent (tab 1) is generic (empty url/title) so it fails url+title matching; it has a real child (tab 5).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: '', title: '', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 100, url: 'https://kid.com', title: 'Kid', index: 1 }));
+
+    // After restart: the parent DIED; the child survives (id 510); an UNRELATED tab
+    // sits at index 0 in the same window — within Pass-3's ±3 positional tolerance.
+    const liveTabs = [
+      makeLiveTab({ id: 999, windowId: 500, url: 'https://unrelated.com', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://kid.com', title: 'Kid', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, null, 'surviving child is re-rooted, not mis-attached');
+    assert.ok(!s.getTab(999)?.children.includes(510), 'unrelated tab did not adopt the orphan');
+    assert.equal(s.getTab(1), null, 'dead parent removed');
+  });
+});
+
+describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () => {
+  it('matches a renamed tab to its own window, not a same-title tab in another window', () => {
+    const s = new ShadowState();
+    // tab 1 (window 100): title 'Inbox', has a child (tab 5); its URL will change.
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://app.com/old', title: 'Inbox', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 100, url: 'https://app.com/kid', title: 'Kid', index: 1 }));
+    // tab 2 (window 200): also title 'Inbox', unrelated; its URL also changes.
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://other.com/old', title: 'Inbox', index: 0 }));
+
+    // The child anchors window 100->500; both 'Inbox' tabs changed URL (fail Pass 2)
+    // and the window-600 Inbox appears first in the live list.
+    const liveTabs = [
+      makeLiveTab({ id: 601, windowId: 600, url: 'https://other.com/new', title: 'Inbox', index: 0 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://app.com/kid', title: 'Kid', index: 1 }),
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://app.com/new', title: 'Inbox', index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, 501, 'child stays under the window-500 Inbox');
+    assert.notEqual(s.getTab(510)?.parentId, 601, 'child is NOT cross-attached to the window-600 Inbox');
+  });
+});

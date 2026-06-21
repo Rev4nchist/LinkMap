@@ -42,6 +42,52 @@ function createNode(tabId, data) {
   };
 }
 
+/**
+ * Picks the best live candidate for a saved node during cross-restart matching,
+ * or null when the choice is ambiguous — so the caller can REFUSE to match
+ * rather than transplant saved lineage onto the wrong tab (the RR-1/RR-8 class
+ * of bug). Disambiguates by the mapped windowId before falling back to weaker
+ * signals, and never defaults to candidates[0].
+ *
+ * @param {Object[]} candidates - live tabs sharing the bucket key (url or title).
+ * @param {Object} savedNode - the saved TabNode being matched.
+ * @param {Map<number,number>} winMap - old->new windowId map from prior matches.
+ * @param {boolean} useTitle - true for the URL pass (fingerprint on title+index);
+ *   false for the title pass (the title is already the bucket key, so use index).
+ * @returns {Object|null} the chosen live tab, or null if ambiguous.
+ */
+function pickReconcileCandidate(candidates, savedNode, winMap, useTitle) {
+  const mappedWid = winMap.get(savedNode.windowId) ?? savedNode.windowId;
+
+  // Prefer candidates that live in the (mapped) saved window.
+  let pool = candidates;
+  const sameWin = candidates.filter((c) => c.windowId === mappedWid);
+  if (sameWin.length > 0) pool = sameWin;
+
+  // Strongest signal: a UNIQUE exact fingerprint within the window-filtered pool.
+  // If two candidates match identically (e.g. duplicate pinned tabs with the same
+  // title and index), that is ambiguous and must not be guessed.
+  const exact = pool.filter((c) =>
+    useTitle
+      ? (c.title === savedNode.title && c.index === savedNode.index)
+      : (c.index === savedNode.index)
+  );
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return null; // ambiguous fingerprint — refuse
+
+  // A single remaining candidate is unambiguous and safe to take.
+  if (pool.length === 1) return pool[0];
+
+  // For the URL pass, a unique same-title candidate is also safe.
+  if (useTitle) {
+    const sameTitle = pool.filter((c) => c.title === savedNode.title);
+    if (sameTitle.length === 1) return sameTitle[0];
+  }
+
+  // Otherwise the bucket is genuinely ambiguous — refuse rather than guess.
+  return null;
+}
+
 export class ShadowState {
   constructor() {
     /** @type {Map<number, Object>} tabId -> TabNode */
@@ -673,6 +719,10 @@ export class ShadowState {
    *   Pass 2b: Title-based fallback (URL changed but title preserved — SPAs, redirects)
    *   Pass 3:  Positional matching within same window (generic URLs like newtab/blank)
    *
+   * Passes 2/2b disambiguate same-URL/same-title duplicates by the mapped
+   * windowId and REFUSE ambiguous buckets rather than guessing (RR-1/RR-8).
+   * Pass 3 never positionally guesses a lineage-bearing node (RR-2).
+   *
    * After matching, dead tabs are removed and orphaned children are re-rooted.
    *
    * @param {Object[]} liveTabs - Array from chrome.tabs.query({}).
@@ -688,6 +738,32 @@ export class ShadowState {
     for (const [id, node] of this.tabs) {
       savedTabWindowIds.set(id, node.windowId);
     }
+
+    // Build an old->new windowId map from the matches accumulated so far.
+    // Used to disambiguate same-URL/same-title duplicates across windows.
+    // Only genuinely matched live IDs vote, so a coincidental tab-ID collision
+    // can never cast a phantom vote.
+    const buildWindowMap = () => {
+      const votes = new Map();
+      for (const liveTab of liveTabs) {
+        if (!matchedLiveIds.has(liveTab.id)) continue;
+        const savedWid = savedTabWindowIds.get(liveTab.id);
+        if (savedWid !== undefined && savedWid !== liveTab.windowId) {
+          if (!votes.has(savedWid)) votes.set(savedWid, new Map());
+          const v = votes.get(savedWid);
+          v.set(liveTab.windowId, (v.get(liveTab.windowId) || 0) + 1);
+        }
+      }
+      const map = new Map();
+      for (const [oldWid, v] of votes) {
+        let bestWid = oldWid, bestCount = 0;
+        for (const [newWid, count] of v) {
+          if (count > bestCount) { bestCount = count; bestWid = newWid; }
+        }
+        map.set(oldWid, bestWid);
+      }
+      return map;
+    };
 
     // Pass 1: Match by tabId (same session)
     for (const id of this.tabs.keys()) {
@@ -716,7 +792,10 @@ export class ShadowState {
       liveByUrl.get(url).push(tab);
     }
 
-    // Match saved → live by composite fingerprint (url, title, index)
+    // Match saved → live by composite fingerprint (url + windowId + title + index).
+    // RR-1: prefer candidates in the mapped window and refuse ambiguous same-URL
+    // buckets rather than corrupting lineage onto another window's tab.
+    const winMapP2 = buildWindowMap();
     for (const [savedId, savedNode] of unmatchedSaved) {
       const url = savedNode.url || '';
       if (!url || url === 'chrome://newtab/' || url === 'about:blank') continue;
@@ -724,15 +803,8 @@ export class ShadowState {
       const candidates = liveByUrl.get(url);
       if (!candidates || candidates.length === 0) continue;
 
-      // Pick best match: prefer same title + index, then same title
-      let best = candidates[0];
-      for (const c of candidates) {
-        if (c.title === savedNode.title && c.index === savedNode.index) {
-          best = c;
-          break;
-        }
-        if (c.title === savedNode.title) best = c;
-      }
+      const best = pickReconcileCandidate(candidates, savedNode, winMapP2, true);
+      if (!best) continue; // ambiguous — let Pass 2b / 3 / dead-removal handle it
 
       // Remap saved ID to live ID — preserves tree structure
       this.replaceTabId(savedId, best.id);
@@ -763,16 +835,19 @@ export class ShadowState {
       if (!liveByTitle.has(title)) liveByTitle.set(title, []);
       liveByTitle.get(title).push(tab);
     }
+    // RR-8: map savedNode.windowId through accumulated matches (the raw saved
+    // windowId is stale post-restart) and refuse ambiguous common-title buckets
+    // instead of defaulting to candidates[0].
+    const winMapP2b = buildWindowMap();
     for (const [savedId, savedNode] of unmatchedSavedP2b) {
       const title = savedNode.title || '';
       if (!title || title === 'New Tab') continue;
       const candidates = liveByTitle.get(title);
       if (!candidates || candidates.length === 0) continue;
-      let best = candidates[0];
-      for (const c of candidates) {
-        if (c.windowId === savedNode.windowId && c.index === savedNode.index) { best = c; break; }
-        if (c.windowId === savedNode.windowId) best = c;
-      }
+
+      const best = pickReconcileCandidate(candidates, savedNode, winMapP2b, false);
+      if (!best) continue;
+
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
       pass2bCount++;
@@ -782,25 +857,8 @@ export class ShadowState {
       if (idx !== -1) candidates.splice(idx, 1);
     }
 
-    // Build preliminary windowIdMap from Pass 1 + 2 + 2b matches for Pass 3
-    const prelimWindowVotes = new Map();
-    for (const liveTab of liveTabs) {
-      if (!matchedLiveIds.has(liveTab.id)) continue;
-      const savedWid = savedTabWindowIds.get(liveTab.id);
-      if (savedWid !== undefined && savedWid !== liveTab.windowId) {
-        if (!prelimWindowVotes.has(savedWid)) prelimWindowVotes.set(savedWid, new Map());
-        const votes = prelimWindowVotes.get(savedWid);
-        votes.set(liveTab.windowId, (votes.get(liveTab.windowId) || 0) + 1);
-      }
-    }
-    const prelimWindowIdMap = new Map();
-    for (const [oldWid, votes] of prelimWindowVotes) {
-      let bestWid = oldWid, bestCount = 0;
-      for (const [newWid, count] of votes) {
-        if (count > bestCount) { bestCount = count; bestWid = newWid; }
-      }
-      prelimWindowIdMap.set(oldWid, bestWid);
-    }
+    // Preliminary windowId map from Pass 1 + 2 + 2b matches, for Pass 3.
+    const prelimWindowIdMap = buildWindowMap();
 
     // Pass 3: Positional matching for generic/remaining unmatched tabs
     const unmatchedLiveP3 = liveTabs.filter(t => !matchedLiveIds.has(t.id));
@@ -819,6 +877,10 @@ export class ShadowState {
       }
     }
     for (const [savedId, savedNode] of unmatchedSavedP3) {
+      // RR-2: never positionally guess a lineage-bearing node — there is no
+      // identity check in this pass, so a wrong match would transplant a whole
+      // subtree. Let these fall to dead-removal + orphan-repair instead.
+      if (savedNode.children.length > 0 || savedNode.parentId != null) continue;
       const mappedWid = prelimWindowIdMap.get(savedNode.windowId) ?? savedNode.windowId;
       const windowTabs = liveByWindow.get(mappedWid);
       if (!windowTabs || windowTabs.length === 0) continue;
