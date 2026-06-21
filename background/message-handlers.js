@@ -45,9 +45,36 @@ export function createMessageHandler({
     moveTabAsChild, moveTabBeforeAfter,
   } = moveHelpers;
 
+  // SW-1: message types that synchronously read/mutate context.state or a
+  // persisted ctx.* collection. If one runs during the init() window (MV3 SW
+  // restarted, side panel still open and unaware), it would operate on the
+  // throwaway pre-init state that init() replaces — the mutation is silently
+  // lost, or corrupts the about-to-be-reconciled tree. These are deferred until
+  // init completes and then replayed. Pure chrome.* passthroughs (activate /
+  // close / pin / mute / reload / etc.) and async-channel (sendResponse) cases
+  // are intentionally NOT gated — they don't touch pre-init state.
+  const INIT_GATED_TYPES = new Set([
+    MSG.MOVE_TAB, MSG.TOGGLE_COLLAPSE, MSG.COLLAPSE_ALL, MSG.EXPAND_ALL,
+    MSG.FOCUS_MODE, MSG.SET_THEME, MSG.SET_GROUP_COLOR, MSG.DUPLICATE_TAB,
+    MSG.NEW_TAB_BELOW, MSG.NEW_TAB_IN_GROUP, MSG.TOGGLE_GROUP_COLLAPSE,
+    MSG.RENAME_GROUP, MSG.MOVE_GROUP, MSG.RENAME_WINDOW, MSG.REORDER_PINNED,
+    MSG.SAVE_GROUP, MSG.CLOSE_DUPLICATES, MSG.UPDATE_SETTINGS,
+    MSG.SET_AUTO_GROUP_RULES, MSG.CREATE_WORKSPACE, MSG.SWITCH_WORKSPACE,
+    MSG.DELETE_WORKSPACE, MSG.RENAME_WORKSPACE, MSG.UPDATE_WORKSPACE,
+    MSG.MOVE_TO_WORKSPACE, MSG.SET_TAB_NOTE, MSG.SAVE_SESSION,
+    MSG.RESTORE_SESSION, MSG.RESTORE_SESSION_WINDOW, MSG.SAVE_TREE_AS_BOOKMARKS,
+  ]);
+
   return function handleMessage(message, _sender, sendResponse) {
     if (!message || typeof message !== 'object') return;
     const { type, payload } = message;
+
+    // SW-1: defer state-mutating commands received before init completes, then
+    // replay them once context.state is the real, reconciled instance.
+    if (!ctx.initComplete && INIT_GATED_TYPES.has(type)) {
+      initDone.then(() => handleMessage(message, _sender, sendResponse));
+      return; // gated cases never use the sendResponse channel
+    }
 
     switch (type) {
       case MSG.GET_STATE:

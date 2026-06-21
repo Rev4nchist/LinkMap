@@ -233,3 +233,79 @@ describe('tab-events event buffering (BUG 5)', () => {
     assert.equal(state.tabs.has(70), false, 'tab should be removed after full sequence');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: the seven previously-dropped events are now buffered (SW-2 / SW-4)
+// ---------------------------------------------------------------------------
+
+describe('tab-events: buffers all lifecycle events during init (SW-2)', () => {
+  let state, context, handlers;
+
+  beforeEach(() => {
+    state = createMockState();
+    context = createMockContext(state);
+    handlers = createTabEventHandlers({
+      context,
+      applyAutoGroupRules: () => {},
+      repositionTabToGroup: () => {},
+      getPinnedBoundaryIndex: () => 0,
+    });
+  });
+
+  it('buffers and replays onReplaced (stale id would otherwise persist)', () => {
+    state.addTab(100, { tabId: 100, title: 'Old', children: [] });
+    handlers.onReplaced(200, 100); // added=200, removed=100
+    assert.equal(state.tabs.has(100), true, 'replace buffered, not applied yet');
+    assert.equal(state.tabs.has(200), false);
+
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.tabs.has(100), false, 'old id remapped after drain');
+    assert.equal(state.tabs.has(200), true, 'new id present after drain');
+  });
+
+  it('buffers and replays onGroupRemoved (phantom group would otherwise persist)', () => {
+    state.addGroup({ id: 5, title: 'G' });
+    handlers.onGroupRemoved({ id: 5 });
+    assert.equal(state.groups.has(5), true, 'removal buffered');
+
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.groups.has(5), false, 'group removed after drain');
+  });
+
+  it('buffers and replays onGroupCreated', () => {
+    handlers.onGroupCreated({ id: 7, title: 'New', color: 'blue' });
+    assert.equal(state.groups.has(7), false, 'creation buffered');
+
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.groups.has(7), true, 'group created after drain');
+  });
+
+  it('buffers and replays onMoved for an existing tab', () => {
+    state.addTab(80, { tabId: 80, title: 'T', index: 0, children: [] });
+    handlers.onMoved(80, { toIndex: 5 });
+    assert.equal(state.tabs.get(80).index, 0, 'move buffered');
+
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.tabs.get(80).index, 5, 'index updated after drain');
+  });
+
+  it('buffers and replays onAttached for an existing tab', () => {
+    state.addTab(81, { tabId: 81, windowId: 1, index: 0, children: [] });
+    handlers.onAttached(81, { newWindowId: 9, newPosition: 3 });
+    assert.equal(state.tabs.get(81).windowId, 1, 'attach buffered');
+
+    context.ctx.initComplete = true;
+    handlers.drainPendingEvents();
+    assert.equal(state.tabs.get(81).windowId, 9, 'windowId updated after drain');
+  });
+
+  it('records activeTabId during init without broadcasting (SW-4)', () => {
+    // initComplete is false; must not throw and must record the active tab.
+    handlers.onActivated({ tabId: 42 });
+    assert.equal(context.ctx.activeTabId, 42, 'active tab recorded even pre-init');
+  });
+});
