@@ -339,7 +339,11 @@ export function createMessageHandler({
         if (anchorTab) {
           const targetIndex = position === 'before' ? anchorTab.index : anchorTab.index + 1;
           suppressGroupCollapseForBurst();
-          chrome.tabGroups.move(groupId, { index: targetIndex }).catch(() => {});
+          chrome.tabGroups.move(groupId, { index: targetIndex }).catch((err) => {
+            // CAE-3: state was already committed; surface the drift instead of
+            // swallowing it (these silent failures made restart bugs hard to find).
+            console.warn('[LinkMap] MOVE_GROUP move failed:', err);
+          });
         }
 
         commitState();
@@ -688,7 +692,10 @@ export function createMessageHandler({
         const insertIdx = reorderPos === 'after' ? targetIdx + 1 : targetIdx;
         state.moveTab(reorderTabId, null, insertIdx);
 
-        chrome.tabs.move(reorderTabId, { index: insertIdx }).catch(() => {});
+        chrome.tabs.move(reorderTabId, { index: insertIdx }).catch((err) => {
+          // CAE-2: state was already committed; log the drift rather than swallow.
+          console.warn('[LinkMap] REORDER_PINNED move failed:', err);
+        });
 
         commitState();
         break;

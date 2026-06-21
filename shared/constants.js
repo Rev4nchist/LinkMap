@@ -140,8 +140,14 @@ export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
 );
 
 /**
- * Returns the best favicon URL for a tab, using Google's favicon service
- * as fallback when tab.favIconUrl is empty.
+ * Returns the best favicon URL for a tab.
+ *
+ * When tab.favIconUrl is empty, falls back to Chrome's ON-DEVICE favicon cache
+ * via the extension's /_favicon/ route (requires the "favicon" permission).
+ * This replaced a Google S2 favicon fallback that sent every visited domain to
+ * google.com on render — a privacy leak contradicting the local-only promise
+ * (SM-1). No network egress now; DEFAULT_FAVICON is the ultimate fallback.
+ *
  * @param {Object} tab - TabNode with favIconUrl and url properties
  * @returns {string}
  */
@@ -149,9 +155,10 @@ export function getFaviconUrl(tab) {
   if (tab.favIconUrl) return tab.favIconUrl;
   if (tab.url && tab.url.startsWith('http')) {
     try {
-      const domain = new URL(tab.url).hostname;
-      return `https://www.google.com/s2/favicons?sz=32&domain=${domain}`;
-    } catch { /* invalid URL */ }
+      return chrome.runtime.getURL(
+        `/_favicon/?pageUrl=${encodeURIComponent(tab.url)}&size=32`
+      );
+    } catch { /* chrome.runtime unavailable — fall through to default */ }
   }
   return DEFAULT_FAVICON;
 }

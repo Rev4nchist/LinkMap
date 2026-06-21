@@ -212,7 +212,7 @@ function sessionEntryHtml(session) {
         <div class="session-window-entry">
           <span class="session-window-name">${wName}</span>
           <span class="session-window-meta">${Number(info.tabCount) || 0} tabs</span>
-          <button class="session-window-restore-btn" data-session-id="${escapeHtml(session.id)}" data-window-id="${wid}" title="Restore this window">
+          <button class="session-window-restore-btn" data-session-id="${escapeHtml(session.id)}" data-window-id="${Number(wid)}" title="Restore this window">
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M2 6h8M6 2l4 4-4 4"/>
             </svg>

@@ -235,8 +235,8 @@ chrome.commands.onCommand.addListener((command) => {
       break;
     case 'close-current-tab':
       chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-        if (tab) chrome.tabs.remove(tab.id);
-      });
+        if (tab) return chrome.tabs.remove(tab.id);
+      }).catch(() => {}); // tab may be gone / no focused window (CAE-1)
       break;
     case 'undo-close-tab':
       sessions.undoCloseTab();
