@@ -1256,3 +1256,96 @@ describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () =>
     assert.notEqual(s.getTab(510)?.parentId, 601, 'child is NOT cross-attached to the window-600 Inbox');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tree-integrity hardening (TI-1, TI-2, TI-3)
+// ---------------------------------------------------------------------------
+
+function serializedNode(over = {}) {
+  return {
+    tabId: 1, parentId: null, children: [], title: 'T', url: 'u', favIconUrl: '',
+    pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1,
+    ...over,
+  };
+}
+
+describe('fromStorage — validate/repair (TI-2)', () => {
+  it('repairs a persisted parent/child cycle so walks terminate', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, parentId: null, children: [2], index: 0 }),
+        2: serializedNode({ tabId: 2, parentId: 1, children: [1], index: 1 }),
+      },
+      rootIds: [1],
+      collapsed: [],
+    };
+    const s = ShadowState.fromStorage(data);
+    const visible = s.getVisibleTabs(); // must terminate, not stack-overflow
+    assert.ok(visible.length >= 1 && visible.length <= 2, 'walk terminates with finite result');
+    assert.ok(s.getDescendants(1).length <= 1, 'descendants finite');
+  });
+
+  it('drops a dangling child reference', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, children: [2, 99] }),
+        2: serializedNode({ tabId: 2, parentId: 1, index: 1 }),
+      },
+      rootIds: [1],
+      collapsed: [],
+    };
+    const s = ShadowState.fromStorage(data);
+    assert.deepEqual(s.getTab(1).children, [2], 'dangling child 99 removed');
+  });
+
+  it('preserves a valid tree unchanged (rootIds order + parent links)', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, children: [2], index: 0 }),
+        2: serializedNode({ tabId: 2, parentId: 1, index: 1 }),
+        3: serializedNode({ tabId: 3, index: 2 }),
+      },
+      rootIds: [1, 3],
+      collapsed: [2],
+    };
+    const s = ShadowState.fromStorage(data);
+    assert.deepEqual(s.rootIds, [1, 3], 'rootIds preserved');
+    assert.equal(s.getTab(2).parentId, 1, 'parent link preserved');
+    assert.deepEqual(s.getTab(1).children, [2], 'children preserved');
+    assert.ok(s.isCollapsed(2), 'collapsed state preserved');
+  });
+});
+
+describe('getVisibleTabs / getDescendants — cycle guard (TI-2)', () => {
+  it('does not infinite-loop on an in-memory cycle', () => {
+    const s = new ShadowState();
+    s.tabs.set(1, serializedNode({ tabId: 1, children: [2] }));
+    s.tabs.set(2, serializedNode({ tabId: 2, parentId: 1, children: [1], index: 1 }));
+    s.rootIds = [1];
+    assert.ok(s.getVisibleTabs().length <= 2, 'getVisibleTabs terminates');
+    assert.ok(s.getDescendants(1).length <= 2, 'getDescendants terminates');
+  });
+});
+
+describe('replaceTabId — self-rename guard (TI-1)', () => {
+  it('is a no-op when oldId === newId', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2, parentId: 1 }));
+    s.replaceTabId(1, 1);
+    assert.ok(s.tabs.has(1), 'tab 1 still present');
+    assert.deepEqual(s.getTab(1).children, [2], 'children intact');
+    assert.equal(s.getTab(2).parentId, 1, 'child link intact');
+  });
+});
+
+describe('removeGroup — prunes groupColors (TI-3)', () => {
+  it('deletes the color override when a group is removed', () => {
+    const s = new ShadowState();
+    s.addGroup({ id: 5, title: 'Dev', color: 'blue', collapsed: false, windowId: 1 });
+    s.setGroupColor(5, '#ff0000');
+    assert.equal(s.groupColors[5], '#ff0000');
+    s.removeGroup(5);
+    assert.ok(!(5 in s.groupColors), 'groupColors entry pruned on removeGroup');
+  });
+});

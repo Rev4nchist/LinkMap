@@ -285,9 +285,11 @@ export class ShadowState {
   focusOnBranch(tabId) {
     this.collapseAll();
 
-    // Walk from target up to root, expanding each ancestor
+    // Walk from target up to root, expanding each ancestor.
+    const seen = new Set(); // cycle guard for a corrupt ancestor chain
     let current = this.tabs.get(tabId);
-    while (current) {
+    while (current && !seen.has(current.tabId)) {
+      seen.add(current.tabId);
       this.collapsed.delete(current.tabId);
       if (current.parentId != null) {
         current = this.tabs.get(current.parentId);
@@ -417,6 +419,7 @@ export class ShadowState {
    */
   removeGroup(groupId) {
     this.groups.delete(groupId);
+    delete this.groupColors[groupId]; // prune the color override so it can't leak
   }
 
   /**
@@ -428,6 +431,7 @@ export class ShadowState {
    * @param {number} newId
    */
   replaceTabId(oldId, newId) {
+    if (oldId === newId) return; // no-op rename — avoid the destructive collision path
     const node = this.tabs.get(oldId);
     if (!node) return;
 
@@ -509,10 +513,13 @@ export class ShadowState {
     if (!node) return [];
 
     const result = [];
+    const visited = new Set([tabId]); // cycle guard — never revisit a node
     const walk = (ids) => {
       for (const id of ids) {
+        if (visited.has(id)) continue;
         const child = this.tabs.get(id);
         if (child) {
+          visited.add(id);
           result.push(child);
           walk(child.children);
         }
@@ -621,11 +628,14 @@ export class ShadowState {
    */
   getVisibleTabs() {
     const result = [];
+    const visited = new Set(); // cycle guard — a corrupt tree must not infinite-loop
 
     const walk = (ids, depth) => {
       for (const id of ids) {
+        if (visited.has(id)) continue;
         const node = this.tabs.get(id);
         if (!node) continue;
+        visited.add(id);
         result.push({ node, depth });
         if (!this.collapsed.has(id)) {
           walk(node.children, depth + 1);
@@ -703,7 +713,66 @@ export class ShadowState {
       }
     }
 
+    state._validateAndRepair();
     return state;
+  }
+
+  /**
+   * Validates and repairs the loaded tree in place so recursive walks always
+   * terminate. Drops self/duplicate/dangling child references, breaks any
+   * parent/child cycle, sets parentId authoritatively from the reachable path,
+   * re-roots unreachable nodes, and prunes the collapsed set. Valid data passes
+   * through unchanged (rootIds order and parent links preserved).
+   */
+  _validateAndRepair() {
+    // 1. Sanitize children arrays: drop self-refs, duplicates, and dangling ids.
+    for (const [id, node] of this.tabs) {
+      if (!Array.isArray(node.children)) { node.children = []; continue; }
+      const seen = new Set();
+      node.children = node.children.filter((cid) => {
+        if (cid === id || seen.has(cid) || !this.tabs.has(cid)) return false;
+        seen.add(cid);
+        return true;
+      });
+    }
+
+    // 2. Walk from roots; a node already reached is a back-edge (cycle) — drop it.
+    const reachable = new Set();
+    const walk = (id, parentId) => {
+      const node = this.tabs.get(id);
+      if (!node) return;
+      reachable.add(id);
+      node.parentId = parentId;
+      node.children = node.children.filter((cid) => !reachable.has(cid));
+      for (const cid of [...node.children]) walk(cid, id);
+    };
+
+    // Seed from declared roots (preserve order), then any other parentId==null node.
+    const seeds = [];
+    const seedSet = new Set();
+    for (const id of (Array.isArray(this.rootIds) ? this.rootIds : [])) {
+      if (this.tabs.has(id) && !seedSet.has(id)) { seeds.push(id); seedSet.add(id); }
+    }
+    for (const [id, node] of this.tabs) {
+      if (node.parentId == null && !seedSet.has(id)) { seeds.push(id); seedSet.add(id); }
+    }
+    for (const id of seeds) { if (!reachable.has(id)) walk(id, null); }
+
+    // 3. Re-root anything still unreachable (orphaned by a broken cycle).
+    const newRoots = [...seeds];
+    const newRootSet = new Set(newRoots);
+    for (const [id] of this.tabs) {
+      if (!reachable.has(id)) {
+        if (!newRootSet.has(id)) { newRoots.push(id); newRootSet.add(id); }
+        walk(id, null);
+      }
+    }
+    this.rootIds = newRoots;
+
+    // 4. Drop collapsed entries for tabs that no longer exist.
+    for (const cid of [...this.collapsed]) {
+      if (!this.tabs.has(cid)) this.collapsed.delete(cid);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1061,9 +1130,12 @@ export class ShadowState {
       }
     }
 
-    // Remove dead groups
+    // Remove dead groups (and their stranded color overrides)
     for (const id of this.groups.keys()) {
-      if (!liveIds.has(id)) this.groups.delete(id);
+      if (!liveIds.has(id)) {
+        this.groups.delete(id);
+        delete this.groupColors[id];
+      }
     }
 
     // Add/update live groups — preserve saved title if Chrome has none
