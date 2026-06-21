@@ -1112,6 +1112,7 @@ export class ShadowState {
     const rescueByCount = new Map();      // "color:wid:count" → title
     const rescueByColor = new Map();      // "color:wid" → title (first match only)
     const rescueByColorOnly = new Map();  // "color" → title (last resort)
+    const colorOnlyOrphanCount = new Map(); // color → # orphaned titled groups
     for (const [id, saved] of this.groups) {
       if (!liveIds.has(id) && saved.title) {
         const count = savedGroupTabCounts.get(id) || 0;
@@ -1127,6 +1128,7 @@ export class ShadowState {
         if (!rescueByColorOnly.has(saved.color)) {
           rescueByColorOnly.set(saved.color, saved.title);
         }
+        colorOnlyOrphanCount.set(saved.color, (colorOnlyOrphanCount.get(saved.color) || 0) + 1);
       }
     }
 
@@ -1160,7 +1162,11 @@ export class ShadowState {
             rescued = rescueByColor.get(colorKey);
             if (rescued) rescueByColor.delete(colorKey);
           }
-          if (!rescued) {
+          if (!rescued && colorOnlyOrphanCount.get(group.color) === 1) {
+            // RR-5: only trust the color-only tier when exactly one orphaned
+            // group of that color existed. Chrome has ~8 colors, so with two
+            // same-color orphans the title is ambiguous and could be pasted
+            // (and pushed back to Chrome) onto an unrelated group.
             rescued = rescueByColorOnly.get(group.color);
             if (rescued) rescueByColorOnly.delete(group.color);
           }

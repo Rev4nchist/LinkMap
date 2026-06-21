@@ -1349,3 +1349,30 @@ describe('removeGroup — prunes groupColors (TI-3)', () => {
     assert.ok(!(5 in s.groupColors), 'groupColors entry pruned on removeGroup');
   });
 });
+
+describe('reconcileWithLiveGroups — color-only title rescue (RR-5)', () => {
+  it('does NOT paste a color-only title when multiple same-color orphans are ambiguous', () => {
+    const s = new ShadowState();
+    // Two orphaned grey groups (ids 1,2 absent from live), both titled.
+    s.groups.set(1, { id: 1, title: 'Research', color: 'grey', collapsed: false, windowId: 10 });
+    s.groups.set(2, { id: 2, title: 'Work', color: 'grey', collapsed: false, windowId: 20 });
+    // Two new live grey groups with empty titles; precise tiers won't match.
+    const liveGroups = [
+      { id: 50, title: '', color: 'grey', collapsed: false, windowId: 500 },
+      { id: 60, title: '', color: 'grey', collapsed: false, windowId: 600 },
+    ];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map());
+    assert.equal(s.groups.get(50).title, '', 'ambiguous color-only rescue refused');
+    assert.equal(s.groups.get(60).title, '', 'ambiguous color-only rescue refused');
+  });
+
+  it('DOES rescue a color-only title when exactly one same-color orphan exists', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    const liveGroups = [
+      { id: 50, title: '', color: 'blue', collapsed: false, windowId: 500 },
+    ];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map());
+    assert.equal(s.groups.get(50).title, 'Research', 'unambiguous color-only rescue applies');
+  });
+});
