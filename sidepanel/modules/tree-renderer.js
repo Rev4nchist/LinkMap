@@ -118,10 +118,12 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
       // Skip tabs for collapsed non-home windows
       if (isCollapsed) continue;
 
-      // Per-window pinned tabs (only in multi-window mode)
-      const windowPinned = pinnedByWindow.get(wid) || [];
-      if (windowPinned.length > 0) {
-        treeElements.push(buildPinnedBar(windowPinned, tabs, wid));
+      // Non-home windows: render pinned tabs inline in the scroller
+      if (!isHome) {
+        const windowPinned = pinnedByWindow.get(wid) || [];
+        if (windowPinned.length > 0) {
+          treeElements.push(buildPinnedBar(windowPinned, tabs, wid));
+        }
       }
     }
 
@@ -166,20 +168,24 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
   // Swap DOM content — keyed reconciliation preserves scroll + DOM state
   const scrollTop = container.scrollTop;
 
-  // Populate global pinned bar only for single-window mode;
-  // in multi-window mode, pinned tabs render inline within each window section.
-  if (sortedWindowIds.length <= 1) {
-    const pinnedElements = [];
+  // Sticky pinned section: only home window's pinned tabs (outside the scroller).
+  // Other windows' pinned tabs render inline under their window separator above.
+  const homePinned = pinnedByWindow.get(homeWindowId) || [];
+  const pinnedElements = [];
+  for (const id of homePinned) {
+    const tab = tabs[id];
+    if (tab) pinnedElements.push(buildPinnedTab(tab));
+  }
+  // Single-window fallback: if no homeWindowId match, show all pinned
+  if (pinnedElements.length === 0 && sortedWindowIds.length <= 1) {
     for (const ids of pinnedByWindow.values()) {
       for (const id of ids) {
         const tab = tabs[id];
         if (tab) pinnedElements.push(buildPinnedTab(tab));
       }
     }
-    pinnedContainer.replaceChildren(...pinnedElements);
-  } else {
-    pinnedContainer.replaceChildren(); // clear global bar in multi-window mode
   }
+  pinnedContainer.replaceChildren(...pinnedElements);
   reconcileChildren(container, treeElements);
 
   container.scrollTop = scrollTop;
@@ -570,9 +576,7 @@ export function patchElement(existing, incoming) {
     if (incomingCurrent) {
       existing.setAttribute('aria-current', incomingCurrent);
     } else if (existingCurrent) {
-      existing.setAttribute('aria-current', '');
-      // Remove the attribute entirely if incoming doesn't have it
-      if (existing.attributes) delete existing.attributes['aria-current'];
+      existing.removeAttribute('aria-current');
     }
   }
 }

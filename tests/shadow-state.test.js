@@ -1010,6 +1010,28 @@ describe('windowNames — reconciliation remap', () => {
     assert.equal(s.getWindowName(20), null);
   });
 
+  it('remaps window name via fallback when vote-based mapping misses a window', () => {
+    const s = new ShadowState();
+    // Window 100 has 1 tab, window 200 has 1 tab
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://a.com' }));
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://b.com' }));
+    s.setWindowName(100, 'Primary');
+    s.setWindowName(200, 'Secondary');
+
+    // After restart: both windows get new IDs
+    // Tab from window 200 matches, tab from window 100 also matches
+    const liveTabs = [
+      { id: 50, url: 'https://a.com', title: '', windowId: 500, index: 0, pinned: false, audible: false, status: 'complete' },
+      { id: 51, url: 'https://b.com', title: '', windowId: 600, index: 0, pinned: false, audible: false, status: 'complete' },
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    // Both names should survive under new window IDs
+    assert.equal(s.getWindowName(500), 'Primary');
+    assert.equal(s.getWindowName(600), 'Secondary');
+  });
+
   it('preserves window names when windowIds do not change', () => {
     const s = new ShadowState();
     s.addTab(1, makeTab({ tabId: 1, windowId: 100 }));
@@ -1021,5 +1043,336 @@ describe('windowNames — reconciliation remap', () => {
 
     s.reconcileWithLiveTabs(liveTabs);
     assert.equal(s.getWindowName(100), 'Work');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 4: reconcileWithLiveTabs returns { windowIdMap, stats }
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — return value includes stats', () => {
+  it('returns an object with windowIdMap and stats properties', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const result = s.reconcileWithLiveTabs(liveTabs);
+    assert.ok(result.windowIdMap instanceof Map, 'should have windowIdMap');
+    assert.ok(typeof result.stats === 'object', 'should have stats object');
+  });
+
+  it('stats includes pass counters', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(typeof stats.pass1, 'number');
+    assert.equal(typeof stats.pass2, 'number');
+    assert.equal(typeof stats.pass2b, 'number');
+    assert.equal(typeof stats.pass3, 'number');
+  });
+
+  it('stats pass1 counts same-session ID matches', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2 }));
+    const liveTabs = [
+      makeLiveTab({ id: 1, index: 0 }),
+      makeLiveTab({ id: 2, index: 1 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass1, 2);
+  });
+
+  it('stats pass2 counts URL-matched tabs', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
+    const liveTabs = [
+      makeLiveTab({ id: 501, url: 'https://github.com', title: 'GitHub', index: 0 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass2, 1);
+  });
+
+  it('stats includes savedRelationships and survivingRelationships', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, parentId: null }));
+    s.addTab(2, makeTab({ tabId: 2, parentId: 1 }));
+    const liveTabs = [
+      makeLiveTab({ id: 1, index: 0 }),
+      makeLiveTab({ id: 2, index: 1 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.savedRelationships, 1, 'one saved parent-child');
+    assert.equal(stats.survivingRelationships, 1, 'relationship should survive');
+  });
+
+  it('stats includes savedCount, liveCount, deadRemoved', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2 }));
+    const liveTabs = [makeLiveTab({ id: 1, index: 0 })];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.savedCount, 2);
+    assert.equal(stats.liveCount, 1);
+    assert.equal(stats.deadRemoved, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 2: pendingUrl fallback in reconciliation
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — pendingUrl fallback', () => {
+  it('matches live tab by pendingUrl when url is empty', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
+    const liveTabs = [
+      makeLiveTab({ id: 501, url: '', pendingUrl: 'https://github.com', title: 'GitHub', index: 0 }),
+    ];
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass2, 1, 'should match via pendingUrl in pass 2');
+    assert.ok(s.tabs.has(501), 'remapped tab should exist');
+  });
+
+  it('stores pendingUrl as url when url is empty during update pass', () => {
+    const s = new ShadowState();
+    const liveTabs = [
+      makeLiveTab({ id: 1, url: '', pendingUrl: 'https://loading.com', title: 'Loading', index: 0 }),
+    ];
+    s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(s.tabs.get(1).url, 'https://loading.com');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 1: Pass 3 uses preliminary windowIdMap
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — Pass 3 windowId mapping', () => {
+  it('matches positionally in mapped window after restart', () => {
+    const s = new ShadowState();
+    s.addTab(100, makeTab({ tabId: 100, windowId: 100, url: 'https://github.com', title: 'GitHub', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, windowId: 100, url: 'https://google.com', title: 'Google', index: 1 }));
+    s.addTab(300, makeTab({ tabId: 300, windowId: 100, url: 'chrome://newtab/', title: 'New Tab', index: 2 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://github.com', title: 'GitHub', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 500, url: 'https://google.com', title: 'Google', index: 1 }),
+      makeLiveTab({ id: 503, windowId: 500, url: 'chrome://newtab/', title: 'New Tab', index: 2 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(stats.pass3, 1, 'Pass 3 should match generic tab via mapped window');
+    assert.ok(s.tabs.has(503), 'generic tab should be matched');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconciliation hardening (RR-1, RR-2, RR-6, RR-8)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — RR-1: same-URL tabs across windows keep their own subtree', () => {
+  it('does not swap subtrees between duplicate-URL tabs in different windows', () => {
+    const s = new ShadowState();
+    // Window A: dashboard (tab 1) with child A (tab 10).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://dash.com', title: 'Dash', index: 0 }));
+    s.addTab(10, makeTab({ tabId: 10, parentId: 1, windowId: 100, url: 'https://child-a.com', title: 'A', index: 1 }));
+    // Window B: dashboard (tab 2) with child B (tab 20) — identical dashboard URL/title.
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://dash.com', title: 'Dash', index: 0 }));
+    s.addTab(20, makeTab({ tabId: 20, parentId: 2, windowId: 200, url: 'https://child-b.com', title: 'B', index: 1 }));
+
+    // After restart: ids + windowIds reassigned. The window-B dashboard appears
+    // FIRST in the live list, so a naive candidates[0] match would cross-attach.
+    const liveTabs = [
+      makeLiveTab({ id: 601, windowId: 600, url: 'https://dash.com', title: 'Dash', index: 0 }),
+      makeLiveTab({ id: 620, windowId: 600, url: 'https://child-b.com', title: 'B', index: 1 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://child-a.com', title: 'A', index: 1 }),
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://dash.com', title: 'Dash', index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, 501, 'child A stays under its own window dashboard');
+    assert.equal(s.getTab(620)?.parentId, 601, 'child B stays under its own window dashboard');
+    assert.notEqual(s.getTab(510)?.parentId, 601, 'child A is NOT cross-attached to window B');
+  });
+
+  it('matches duplicate-URL tabs in the same window by index', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 0 }));
+    s.addTab(2, makeTab({ tabId: 2, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 3 }));
+    const liveTabs = [
+      makeLiveTab({ id: 51, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 0 }),
+      makeLiveTab({ id: 52, windowId: 100, url: 'https://dup.com', title: 'Dup', index: 3 }),
+    ];
+    s.reconcileWithLiveTabs(liveTabs);
+    assert.ok(s.tabs.has(51) && s.tabs.has(52), 'both live tabs present');
+    assert.ok(!s.tabs.has(1) && !s.tabs.has(2), 'saved ids remapped, not duplicated');
+  });
+});
+
+describe('reconcileWithLiveTabs — RR-2: lineage-bearing nodes are not positionally guessed', () => {
+  it('re-roots a surviving child instead of attaching it to an unrelated nearby tab', () => {
+    const s = new ShadowState();
+    // Parent (tab 1) is generic (empty url/title) so it fails url+title matching; it has a real child (tab 5).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: '', title: '', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 100, url: 'https://kid.com', title: 'Kid', index: 1 }));
+
+    // After restart: the parent DIED; the child survives (id 510); an UNRELATED tab
+    // sits at index 0 in the same window — within Pass-3's ±3 positional tolerance.
+    const liveTabs = [
+      makeLiveTab({ id: 999, windowId: 500, url: 'https://unrelated.com', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://kid.com', title: 'Kid', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, null, 'surviving child is re-rooted, not mis-attached');
+    assert.ok(!s.getTab(999)?.children.includes(510), 'unrelated tab did not adopt the orphan');
+    assert.equal(s.getTab(1), null, 'dead parent removed');
+  });
+});
+
+describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () => {
+  it('matches a renamed tab to its own window, not a same-title tab in another window', () => {
+    const s = new ShadowState();
+    // tab 1 (window 100): title 'Inbox', has a child (tab 5); its URL will change.
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://app.com/old', title: 'Inbox', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 100, url: 'https://app.com/kid', title: 'Kid', index: 1 }));
+    // tab 2 (window 200): also title 'Inbox', unrelated; its URL also changes.
+    s.addTab(2, makeTab({ tabId: 2, windowId: 200, url: 'https://other.com/old', title: 'Inbox', index: 0 }));
+
+    // The child anchors window 100->500; both 'Inbox' tabs changed URL (fail Pass 2)
+    // and the window-600 Inbox appears first in the live list.
+    const liveTabs = [
+      makeLiveTab({ id: 601, windowId: 600, url: 'https://other.com/new', title: 'Inbox', index: 0 }),
+      makeLiveTab({ id: 510, windowId: 500, url: 'https://app.com/kid', title: 'Kid', index: 1 }),
+      makeLiveTab({ id: 501, windowId: 500, url: 'https://app.com/new', title: 'Inbox', index: 0 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(510)?.parentId, 501, 'child stays under the window-500 Inbox');
+    assert.notEqual(s.getTab(510)?.parentId, 601, 'child is NOT cross-attached to the window-600 Inbox');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tree-integrity hardening (TI-1, TI-2, TI-3)
+// ---------------------------------------------------------------------------
+
+function serializedNode(over = {}) {
+  return {
+    tabId: 1, parentId: null, children: [], title: 'T', url: 'u', favIconUrl: '',
+    pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1,
+    ...over,
+  };
+}
+
+describe('fromStorage — validate/repair (TI-2)', () => {
+  it('repairs a persisted parent/child cycle so walks terminate', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, parentId: null, children: [2], index: 0 }),
+        2: serializedNode({ tabId: 2, parentId: 1, children: [1], index: 1 }),
+      },
+      rootIds: [1],
+      collapsed: [],
+    };
+    const s = ShadowState.fromStorage(data);
+    const visible = s.getVisibleTabs(); // must terminate, not stack-overflow
+    assert.ok(visible.length >= 1 && visible.length <= 2, 'walk terminates with finite result');
+    assert.ok(s.getDescendants(1).length <= 1, 'descendants finite');
+  });
+
+  it('drops a dangling child reference', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, children: [2, 99] }),
+        2: serializedNode({ tabId: 2, parentId: 1, index: 1 }),
+      },
+      rootIds: [1],
+      collapsed: [],
+    };
+    const s = ShadowState.fromStorage(data);
+    assert.deepEqual(s.getTab(1).children, [2], 'dangling child 99 removed');
+  });
+
+  it('preserves a valid tree unchanged (rootIds order + parent links)', () => {
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, children: [2], index: 0 }),
+        2: serializedNode({ tabId: 2, parentId: 1, index: 1 }),
+        3: serializedNode({ tabId: 3, index: 2 }),
+      },
+      rootIds: [1, 3],
+      collapsed: [2],
+    };
+    const s = ShadowState.fromStorage(data);
+    assert.deepEqual(s.rootIds, [1, 3], 'rootIds preserved');
+    assert.equal(s.getTab(2).parentId, 1, 'parent link preserved');
+    assert.deepEqual(s.getTab(1).children, [2], 'children preserved');
+    assert.ok(s.isCollapsed(2), 'collapsed state preserved');
+  });
+});
+
+describe('getVisibleTabs / getDescendants — cycle guard (TI-2)', () => {
+  it('does not infinite-loop on an in-memory cycle', () => {
+    const s = new ShadowState();
+    s.tabs.set(1, serializedNode({ tabId: 1, children: [2] }));
+    s.tabs.set(2, serializedNode({ tabId: 2, parentId: 1, children: [1], index: 1 }));
+    s.rootIds = [1];
+    assert.ok(s.getVisibleTabs().length <= 2, 'getVisibleTabs terminates');
+    assert.ok(s.getDescendants(1).length <= 2, 'getDescendants terminates');
+  });
+});
+
+describe('replaceTabId — self-rename guard (TI-1)', () => {
+  it('is a no-op when oldId === newId', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2, parentId: 1 }));
+    s.replaceTabId(1, 1);
+    assert.ok(s.tabs.has(1), 'tab 1 still present');
+    assert.deepEqual(s.getTab(1).children, [2], 'children intact');
+    assert.equal(s.getTab(2).parentId, 1, 'child link intact');
+  });
+});
+
+describe('removeGroup — prunes groupColors (TI-3)', () => {
+  it('deletes the color override when a group is removed', () => {
+    const s = new ShadowState();
+    s.addGroup({ id: 5, title: 'Dev', color: 'blue', collapsed: false, windowId: 1 });
+    s.setGroupColor(5, '#ff0000');
+    assert.equal(s.groupColors[5], '#ff0000');
+    s.removeGroup(5);
+    assert.ok(!(5 in s.groupColors), 'groupColors entry pruned on removeGroup');
+  });
+});
+
+describe('reconcileWithLiveGroups — color-only title rescue (RR-5)', () => {
+  it('does NOT paste a color-only title when multiple same-color orphans are ambiguous', () => {
+    const s = new ShadowState();
+    // Two orphaned grey groups (ids 1,2 absent from live), both titled.
+    s.groups.set(1, { id: 1, title: 'Research', color: 'grey', collapsed: false, windowId: 10 });
+    s.groups.set(2, { id: 2, title: 'Work', color: 'grey', collapsed: false, windowId: 20 });
+    // Two new live grey groups with empty titles; precise tiers won't match.
+    const liveGroups = [
+      { id: 50, title: '', color: 'grey', collapsed: false, windowId: 500 },
+      { id: 60, title: '', color: 'grey', collapsed: false, windowId: 600 },
+    ];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map());
+    assert.equal(s.groups.get(50).title, '', 'ambiguous color-only rescue refused');
+    assert.equal(s.groups.get(60).title, '', 'ambiguous color-only rescue refused');
+  });
+
+  it('DOES rescue a color-only title when exactly one same-color orphan exists', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    const liveGroups = [
+      { id: 50, title: '', color: 'blue', collapsed: false, windowId: 500 },
+    ];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map());
+    assert.equal(s.groups.get(50).title, 'Research', 'unambiguous color-only rescue applies');
   });
 });

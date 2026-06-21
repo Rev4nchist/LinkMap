@@ -456,7 +456,7 @@
   letter-spacing: 0.5px;
 }
 
-/* Per-window pinned tab bar (multi-window mode) */
+/* Per-window pinned tab bar (multi-window mode, inline in scroller) */
 .window-pinned-bar {
   display: flex;
   flex-wrap: wrap;

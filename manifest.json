@@ -12,7 +12,8 @@
     "alarms",
     "unlimitedStorage",
     "history",
-    "bookmarks"
+    "bookmarks",
+    "favicon"
   ],
   "background": {
     "service_worker": "background.js",

@@ -85,10 +85,64 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const windowIdMap = context.state.reconcileWithLiveTabs(liveTabs);
+    const { windowIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
+
+    // 3d. Schedule deferred re-reconciliation if matching quality was poor
+    if (savedData && stats && stats.savedRelationships > 0 && stats.survivingRelationships < stats.savedRelationships * 0.7) {
+      console.log('[LinkMap] Poor reconciliation quality — scheduling retry in 2s');
+      setTimeout(async () => {
+        try {
+          const retryLiveTabs = await chrome.tabs.query({});
+          const retryState = ShadowState.fromStorage(savedData);
+          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
+
+          // Only swap if retry preserved MORE relationships
+          if (retryStats.survivingRelationships > stats.survivingRelationships) {
+            console.log('[LinkMap] Retry improved reconciliation:', JSON.stringify(retryStats));
+
+            // SW-3/RR-7: once initComplete is true, buffering is off and live tab
+            // events mutate context.state directly during this 2s window. retryState
+            // is rebuilt from the original snapshot, so a wholesale swap would drop
+            // those interim edits. Carry over the lineage and collapsed state the
+            // live state established (re-parents from openerTabId, panel collapses)
+            // before swapping.
+            const liveState = context.state;
+            for (const [id, liveNode] of liveState.tabs) {
+              const retryNode = retryState.tabs.get(id);
+              if (!retryNode) continue;
+              if (liveNode.parentId != null && retryNode.parentId == null
+                  && retryState.tabs.has(liveNode.parentId)) {
+                retryState.moveTab(id, liveNode.parentId, Infinity);
+              }
+            }
+            for (const cid of liveState.collapsed) {
+              if (retryState.tabs.has(cid)) retryState.collapsed.add(cid);
+            }
+
+            context.state = retryState;
+
+            // Re-run group reconciliation
+            const retryGroups = await chrome.tabGroups.query({});
+            const retryGroupCounts = new Map();
+            for (const [, tab] of retryState.tabs) {
+              const gid = tab.groupId;
+              if (gid && gid !== -1) retryGroupCounts.set(gid, (retryGroupCounts.get(gid) || 0) + 1);
+            }
+            context.state.reconcileWithLiveGroups(retryGroups, retryGroupCounts, retryWindowIdMap);
+
+            saveState();
+            broadcastState();
+          } else {
+            console.log('[LinkMap] Retry did not improve — keeping original');
+          }
+        } catch (err) {
+          console.error('[LinkMap] Retry reconciliation failed:', err);
+        }
+      }, 2000);
+    }
 
     // 3b. Query all live tab groups and reconcile
     const liveGroups = await chrome.tabGroups.query({});
@@ -134,6 +188,7 @@ async function init() {
     broadcastState();
 
     ctx.initComplete = true;
+    tabEvents.drainPendingEvents();
     context.retryMissingGroupTitles();
     console.log(`[LinkMap] Initialized with ${context.state.tabs.size} tabs, ${context.state.groups.size} groups`);
   } catch (err) {
@@ -200,8 +255,8 @@ chrome.commands.onCommand.addListener((command) => {
       break;
     case 'close-current-tab':
       chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-        if (tab) chrome.tabs.remove(tab.id);
-      });
+        if (tab) return chrome.tabs.remove(tab.id);
+      }).catch(() => {}); // tab may be gone / no focused window (CAE-1)
       break;
     case 'undo-close-tab':
       sessions.undoCloseTab();

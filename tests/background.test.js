@@ -1686,3 +1686,47 @@ describe('pinned tab repositioning via onUpdated', () => {
     assert.ok(tab2Idx > tab1Idx, `unpinned tab 2 (idx ${tab2Idx}) should be after pinned tab 1 (idx ${tab1Idx})`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Track C — restore reattaches lineage + collapsed state (FM-1, FM-2)
+// ---------------------------------------------------------------------------
+
+describe('Track C: restore reattaches lineage and collapsed state (FM-1/FM-2)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('rebuilds parent/child lineage without relying on onCreated, and restores collapsed', async () => {
+    // The chrome mock never fires onCreated, so the restored tree only forms if
+    // restore seeds nodes authoritatively (FM-1) rather than racing the listener.
+    const base = makeMultiWindowSession();
+    const session = makeMultiWindowSession({
+      data: { ...base.data, collapsed: [10] }, // parent (saved id 10) was collapsed
+    });
+
+    const { listener } = await setupSessionRestore(chromeMock, session);
+
+    listener({ type: 'RESTORE_SESSION', payload: { sessionId: 'manual-test-session' } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Created ids are deterministic: restore iterates Object.values(session.data.tabs)
+    // and V8 returns integer-like object keys in ascending numeric order (10,11,20,21),
+    // while the chrome mock assigns ids sequentially from 1000 — so 10->1000, 11->1001,
+    // 20->1002, 21->1003.
+    let state;
+    listener({ type: 'GET_STATE' }, {}, (resp) => { state = resp; });
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.ok(state, 'GET_STATE returned a payload');
+    assert.equal(state.tabs['1001']?.parentId, 1000, 'Win1 child reattached to its parent (FM-1)');
+    assert.equal(state.tabs['1003']?.parentId, 1002, 'Win2 child reattached to its parent (FM-1)');
+    assert.ok(state.tabs['1000']?.children.includes(1001), 'parent lists its child');
+    assert.ok(state.collapsed.includes(1000), 'collapsed state restored, remapped to new id (FM-2)');
+  });
+});
