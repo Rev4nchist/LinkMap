@@ -2,12 +2,10 @@
 
 ## Current Focus
 
-**Tree-style visualization**
-- Started: 2026-03-23
-
-
+_No active goal — set one with `/roadmap focus <item>`._
 
 ## Completed
+- [x] Tree-style visualization — stability hardening + bug-hunt (reconciliation correctness, crash prevention, SW lifecycle races); 43-agent review, PR #7 merged, 396 tests (2026-06-22) `902b6cd`
 - [x] [fix] window name lost for secondary window after Chrome restart (#9) (2026-03-24) `5fe1084`
 - [x] [fix] sticky pinned tabs show only current window's pins (#8) (2026-03-23) `9ce9399`
 - [x] [fix] use removeAttribute instead of delete on NamedNodeMap (2026-03-23) `937269e`
