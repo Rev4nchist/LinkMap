@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { ShadowState } from '../shared/shadow-state.js';
+import { ORPHANED_GROUP_TTL_MS, ORPHANED_GROUP_CAP } from '../shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1374,5 +1375,226 @@ describe('reconcileWithLiveGroups — color-only title rescue (RR-5)', () => {
     ];
     s.reconcileWithLiveGroups(liveGroups, new Map(), new Map());
     assert.equal(s.groups.get(50).title, 'Research', 'unambiguous color-only rescue applies');
+  });
+});
+
+describe('reconcileWithLiveGroups — orphaned titled groups are quarantined, not destroyed (RR-9)', () => {
+  it('quarantines orphaned titled groups with rawWindowId/count/colorOverride; untitled orphans still deleted', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(1, '#123456');
+    s.groups.set(2, { id: 2, title: '', color: 'grey', collapsed: false, windowId: 10 });
+
+    s.reconcileWithLiveGroups([], new Map([[1, 3]]), new Map(), 1000);
+
+    assert.ok(!s.groups.has(1), 'orphaned titled group removed from live groups');
+    assert.ok(!s.groups.has(2), 'untitled orphan removed too');
+    assert.ok(!(1 in s.groupColors), 'live color override removed');
+    assert.ok(s.orphanedGroups.has(1), 'titled orphan quarantined');
+    assert.ok(!s.orphanedGroups.has(2), 'untitled orphan NOT quarantined — nothing to rescue');
+
+    const entry = s.orphanedGroups.get(1);
+    assert.equal(entry.title, 'Research');
+    assert.equal(entry.color, 'blue');
+    assert.equal(entry.rawWindowId, 10);
+    assert.equal(entry.count, 3);
+    assert.equal(entry.colorOverride, '#123456');
+    assert.equal(entry.orphanedAt, 1000);
+  });
+
+  it('rescues a quarantined title onto a new-id live group and remaps the color override', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(1, '#123456');
+    s.reconcileWithLiveGroups([], new Map([[1, 2]]), new Map(), 1000);
+
+    const liveGroups = [{ id: 99, title: '', color: 'blue', collapsed: false, windowId: 10 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), 2000);
+
+    assert.equal(s.groups.get(99).title, 'Research', 'title rescued onto new id');
+    assert.equal(s.groupColors[99], '#123456', 'color override remapped to new id');
+    assert.equal(s.orphanedGroups.size, 0, 'quarantine emptied after rescue');
+  });
+
+  it('prunes quarantine entries older than the TTL', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+    assert.ok(s.orphanedGroups.has(1), 'quarantined at t=1000');
+
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000 + ORPHANED_GROUP_TTL_MS + 1);
+    assert.ok(!s.orphanedGroups.has(1), 'expired entry pruned on next reconcile');
+  });
+
+  it('round-trips orphanedGroups through toSerializable/fromStorage', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(1, '#123456');
+    s.reconcileWithLiveGroups([], new Map([[1, 2]]), new Map(), 1000);
+
+    const data = s.toSerializable();
+    const restored = ShadowState.fromStorage(data);
+
+    assert.ok(restored.orphanedGroups instanceof Map);
+    assert.equal(restored.orphanedGroups.size, 1);
+    const entry = restored.orphanedGroups.get(1);
+    assert.equal(entry.title, 'Research');
+    assert.equal(entry.rawWindowId, 10);
+    assert.equal(entry.count, 2);
+    assert.equal(entry.colorOverride, '#123456');
+    assert.equal(entry.orphanedAt, 1000);
+  });
+
+  it('evicts the oldest quarantine entries once the cap is exceeded, always warning', () => {
+    const s = new ShadowState();
+    for (let i = 1; i <= ORPHANED_GROUP_CAP + 1; i++) {
+      s.groups.set(i, { id: i, title: `Group ${i}`, color: 'blue', collapsed: false, windowId: 10 });
+    }
+    const originalWarn = console.warn;
+    const warnCalls = [];
+    console.warn = (...args) => warnCalls.push(args);
+    try {
+      s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(s.orphanedGroups.size, ORPHANED_GROUP_CAP, 'capped at ORPHANED_GROUP_CAP');
+    assert.ok(!s.orphanedGroups.has(1), 'oldest entry evicted');
+    assert.ok(s.orphanedGroups.has(ORPHANED_GROUP_CAP + 1), 'newest entry retained');
+    assert.ok(warnCalls.length >= 1, 'eviction warns, never silent');
+  });
+});
+
+describe('reconcileWithLiveGroups — gated resurrection (RR-9)', () => {
+  it('restores a quarantined entry onto a live group with the same id when title empty, color matches, window maps', () => {
+    const s = new ShadowState();
+    s.groups.set(7, { id: 7, title: 'Research', color: 'blue', collapsed: true, windowId: 10 });
+    s.setGroupColor(7, '#123456');
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+    assert.ok(s.orphanedGroups.has(7));
+
+    const liveGroups = [{ id: 7, title: '', color: 'blue', collapsed: false, windowId: 10 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), 2000);
+
+    assert.equal(s.groups.get(7).title, 'Research', 'title restored');
+    assert.equal(s.groupColors[7], '#123456', 'color override restored');
+    assert.ok(!s.orphanedGroups.has(7), 'quarantine entry consumed');
+  });
+
+  it('does NOT resurrect when the live group with the same id has a different color', () => {
+    const s = new ShadowState();
+    s.groups.set(7, { id: 7, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(7, '#123456');
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+
+    const liveGroups = [{ id: 7, title: '', color: 'red', collapsed: false, windowId: 10 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), 2000);
+
+    assert.equal(s.groups.get(7).title, '', 'title NOT restored on color mismatch');
+    assert.ok(!(7 in s.groupColors), 'no color override applied on mismatch');
+
+    const survivors = [...s.orphanedGroups.values()].filter((e) => e.title === 'Research');
+    assert.equal(survivors.length, 1, 'quarantine entry survives, re-keyed, for normal tier matching');
+    assert.ok(!s.orphanedGroups.has(7), 'old id key freed for the live group');
+  });
+});
+
+describe('rescueUntitledLiveGroup (RR-9)', () => {
+  it('rescues via the exact count tier', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map([[1, 2]]), new Map(), 1000);
+
+    s.addGroup({ id: 99, title: '', color: 'blue', collapsed: false, windowId: 10 });
+    s.addTab(101, makeTab({ tabId: 101, groupId: 99 }));
+    s.addTab(102, makeTab({ tabId: 102, groupId: 99 }));
+
+    const title = s.rescueUntitledLiveGroup({ id: 99, color: 'blue', windowId: 10 }, 2000);
+    assert.equal(title, 'Research');
+    assert.equal(s.groups.get(99).title, 'Research');
+    assert.ok(!s.orphanedGroups.has(1));
+  });
+
+  it('falls back to the color:windowId tier when member counts differ', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map([[1, 5]]), new Map(), 1000);
+
+    s.addGroup({ id: 99, title: '', color: 'blue', collapsed: false, windowId: 10 });
+    s.addTab(101, makeTab({ tabId: 101, groupId: 99 }));
+
+    const title = s.rescueUntitledLiveGroup({ id: 99, color: 'blue', windowId: 10 }, 2000);
+    assert.equal(title, 'Research');
+  });
+
+  it('refuses a color-only rescue when two same-color orphans are ambiguous (RR-5)', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'grey', collapsed: false, windowId: 10 });
+    s.groups.set(2, { id: 2, title: 'Work', color: 'grey', collapsed: false, windowId: 20 });
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+
+    s.addGroup({ id: 99, title: '', color: 'grey', collapsed: false, windowId: 999 });
+    s.addTab(101, makeTab({ tabId: 101, groupId: 99 }));
+
+    const title = s.rescueUntitledLiveGroup({ id: 99, color: 'grey', windowId: 999 }, 2000);
+    assert.equal(title, null, 'ambiguous color-only rescue refused');
+  });
+
+  it('returns null for a zero-member group (membership-stable guard)', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+
+    s.addGroup({ id: 99, title: '', color: 'blue', collapsed: false, windowId: 10 });
+
+    const title = s.rescueUntitledLiveGroup({ id: 99, color: 'blue', windowId: 10 }, 2000);
+    assert.equal(title, null);
+    assert.ok(s.orphanedGroups.has(1), 'entry untouched — no match attempted');
+  });
+
+  it('never rescues from an expired quarantine entry', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+
+    s.addGroup({ id: 99, title: '', color: 'blue', collapsed: false, windowId: 10 });
+    s.addTab(101, makeTab({ tabId: 101, groupId: 99 }));
+
+    const title = s.rescueUntitledLiveGroup(
+      { id: 99, color: 'blue', windowId: 10 },
+      1000 + ORPHANED_GROUP_TTL_MS + 1
+    );
+    assert.equal(title, null);
+  });
+});
+
+describe('reconcileWithLiveGroups — windowId re-mapping is fresh per reconcile (RR-9 / A2)', () => {
+  it('re-maps rawWindowId through a fresh windowIdMap on every call', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.reconcileWithLiveGroups([], new Map(), new Map(), 1000);
+
+    const liveGroups = [{ id: 99, title: '', color: 'blue', collapsed: false, windowId: 200 }];
+    const windowIdMap = new Map([[10, 200]]);
+    s.reconcileWithLiveGroups(liveGroups, new Map(), windowIdMap, 2000);
+
+    assert.equal(s.groups.get(99).title, 'Research', 'matched via color:wid tier using freshly-mapped windowId');
+  });
+});
+
+describe('updateGroup — windowId persistence (RR-11)', () => {
+  it('applies windowId from changes when present', () => {
+    const s = new ShadowState();
+    s.addGroup({ id: 5, title: 'Dev', color: 'blue', collapsed: false, windowId: 1 });
+    s.updateGroup(5, { windowId: 42 });
+    assert.equal(s.groups.get(5).windowId, 42);
+  });
+
+  it('leaves windowId untouched when not present in changes', () => {
+    const s = new ShadowState();
+    s.addGroup({ id: 5, title: 'Dev', color: 'blue', collapsed: false, windowId: 1 });
+    s.updateGroup(5, { title: 'Renamed' });
+    assert.equal(s.groups.get(5).windowId, 1);
   });
 });

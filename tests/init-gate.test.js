@@ -18,6 +18,7 @@ function makeHandler(initDone, ctx, state) {
   const context = {
     ctx, state,
     commitState() {},
+    commitStateNow() {},
     broadcastState() {},
     getStatePayload: () => ({}),
     suppressGroupCollapseForBurst() {},
@@ -72,5 +73,73 @@ describe('message handler init gating (SW-1)', () => {
     // ACTIVATE_TAB is a passthrough — it should run immediately even pre-init.
     handler({ type: MSG.ACTIVATE_TAB, payload: { tabId: 7 } }, {}, () => {});
     assert.equal(activated, 7, 'passthrough ran without waiting for init');
+  });
+});
+
+describe('message handler init gating (A8 — widened INIT_GATED_TYPES/INIT_GATED_ASYNC)', () => {
+  it('MOVE_TO_GROUP is gated pre-init and keeps the response channel open', async () => {
+    let resolveInit;
+    const initDone = new Promise((r) => { resolveInit = r; });
+    const ctx = { initComplete: false, DEBUG: false, settings: {}, workspaces: [], tabNotes: {}, activeTabId: null };
+    const state = new ShadowState();
+    const handler = makeHandler(initDone, ctx, state);
+
+    let getCalled = false;
+    globalThis.chrome.tabs.get = async (id) => { getCalled = true; return { id, pinned: false }; };
+    globalThis.chrome.tabs.group = async () => 777;
+
+    let response = null;
+    const keepOpen = handler(
+      { type: MSG.MOVE_TO_GROUP, payload: { tabId: 7, groupId: 777 } },
+      {},
+      (r) => { response = r; }
+    );
+
+    assert.equal(keepOpen, true, 'gate keeps the async channel open for MOVE_TO_GROUP');
+    assert.equal(response, null, 'response not sent yet — deferred until init completes');
+    assert.equal(getCalled, false, 'handler body must not run at all until init completes — proves real deferral, not just async timing');
+
+    ctx.initComplete = true;
+    resolveInit();
+    await initDone;
+    await new Promise((r) => setTimeout(r, 10)); // let the deferred async handler settle
+
+    assert.deepEqual(response, { groupId: 777 }, 'deferred MOVE_TO_GROUP eventually responds');
+  });
+
+  it('GET_SETTINGS is gated pre-init (returns true) and responds with settings post-init', async () => {
+    let resolveInit;
+    const initDone = new Promise((r) => { resolveInit = r; });
+    const ctx = { initComplete: false, DEBUG: false, settings: { sleepOnCollapse: true }, workspaces: [], tabNotes: {}, activeTabId: null };
+    const state = new ShadowState();
+    const handler = makeHandler(initDone, ctx, state);
+
+    let response = null;
+    const keepOpen = handler({ type: MSG.GET_SETTINGS, payload: {} }, {}, (r) => { response = r; });
+
+    assert.equal(keepOpen, true, 'gate keeps channel open for GET_SETTINGS');
+    assert.equal(response, null, 'no response before init completes');
+
+    ctx.initComplete = true;
+    resolveInit();
+    await initDone;
+    await Promise.resolve();
+
+    assert.deepEqual(response, { settings: { sleepOnCollapse: true } });
+  });
+
+  it('UNGROUP_TAB and MULTI_GROUP are gated but do not keep the response channel open', () => {
+    const ctx = { initComplete: false, DEBUG: false, settings: {}, workspaces: [], tabNotes: {}, activeTabId: null };
+    const state = new ShadowState();
+    const handler = makeHandler(new Promise(() => {}), ctx, state); // never resolves — irrelevant here
+
+    globalThis.chrome.tabs.ungroup = async () => {};
+    globalThis.chrome.tabs.group = async () => 1;
+
+    const r1 = handler({ type: MSG.UNGROUP_TAB, payload: { tabId: 1 } }, {}, () => {});
+    const r2 = handler({ type: MSG.MULTI_GROUP, payload: { tabIds: [1, 2] } }, {}, () => {});
+
+    assert.notEqual(r1, true, 'UNGROUP_TAB gate does not keep the channel open');
+    assert.notEqual(r2, true, 'MULTI_GROUP gate does not keep the channel open');
   });
 });

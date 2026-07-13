@@ -48,6 +48,9 @@ function createChromeMock() {
       remove: mock.fn(async () => {}),
       duplicate: mock.fn(async () => ({})),
       group: mock.fn(async () => nextGroupId++),
+      ungroup: mock.fn(async () => {}),
+      move: mock.fn(async () => ({})),
+      get: mock.fn(async (id) => ({ id, pinned: false, groupId: -1 })),
     },
     tabGroups: {
       onCreated: makeEvent('tabGroups.onCreated'),
@@ -55,6 +58,7 @@ function createChromeMock() {
       onUpdated: makeEvent('tabGroups.onUpdated'),
       query: mock.fn(async () => []),
       update: mock.fn(async () => ({})),
+      get: mock.fn(async (id) => ({ id, windowId: 1 })),
     },
     windows: {
       onCreated: makeEvent('windows.onCreated'),
@@ -302,6 +306,260 @@ describe('background.js initialization', () => {
     await new Promise((r) => setTimeout(r, 600));
 
     assert.ok(chromeMock.storage.local.set.mock.callCount() >= 1, 'state was saved after init');
+  });
+
+  it('A6: init saves state immediately, not via the 500ms debounce', async () => {
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [];
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    await loadBackground(chromeMock);
+    // Only loadBackground's own ~50ms settle wait has elapsed — well under
+    // the 500ms save debounce. An immediate save must already be persisted.
+    assert.ok(chromeMock.storage.local._data.linkmap_state, 'state persisted immediately after init, before the debounce would have fired');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: SW-5 — init failure liveness (A7)
+// ---------------------------------------------------------------------------
+
+describe('background.js init failure liveness (SW-5, A7)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('SW-5: chrome.windows.getCurrent rejecting does not abort init (inner try/catch)', async () => {
+    chromeMock.windows.getCurrent = mock.fn(async () => { throw new Error('no window'); });
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [];
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    await loadBackground(chromeMock);
+    await new Promise((r) => setTimeout(r, 60));
+
+    // init still completed and saved reconciled state despite the failure.
+    assert.ok(chromeMock.storage.local._data.linkmap_state, 'state was saved despite getCurrent failure');
+
+    // A gated message resolves immediately — proves initComplete flipped true.
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    let response = null;
+    listener({ type: 'GET_SETTINGS' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.ok(response && response.settings, 'GET_SETTINGS resolved — init completed normally');
+  });
+
+  it('SW-5: chrome.tabs.query({}) rejecting hits the outer catch — no save, initComplete still flips via finally, state restored from savedData', async () => {
+    const savedState = {
+      version: 1,
+      tabs: {
+        1: { tabId: 1, parentId: null, children: [], title: 'Saved', url: 'https://saved.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+      },
+      rootIds: [1],
+      collapsed: [],
+      groups: {},
+      groupColors: {},
+      theme: 'dracula',
+    };
+
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && Object.keys(queryInfo).length === 0) {
+        throw new Error('tabs.query failed');
+      }
+      return [];
+    });
+
+    await loadBackground(chromeMock, savedState);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Never call saveState in the failure path.
+    assert.equal(chromeMock.storage.local.set.mock.callCount(), 0, 'no storage.local.set call in the outer-catch failure path');
+
+    // initComplete still flips true via finally — a gated message resolves.
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    let response = null;
+    listener({ type: 'GET_SETTINGS' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.ok(response && response.settings, 'gated message resolved — initComplete flipped true via finally despite the failure');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: RR-10 (2a) + A4 — reconcileRetryGroups (background/context.js)
+// ---------------------------------------------------------------------------
+//
+// The retry's group reconcile + A4 merge is exercised via the extracted,
+// exported reconcileRetryGroups() helper directly, rather than through a
+// full loadBackground() end-to-end retry trigger. Reason: background.js's
+// retry rebuilds `retryState` from the SAME `savedData` object reference the
+// main reconcile already mutated in place (ShadowState.fromStorage does not
+// deep-clone, and reconcileWithLiveTabs's dead-tab/orphan-repair paths — see
+// removeTab and _validateAndRepair's parentId-authoritative walk — mutate
+// shared node objects). That makes "the retry recovers MORE relationships
+// than the main pass" mathematically unreachable via any tab-lineage-loss
+// scenario in a black-box test (verified empirically) — a pre-existing gap
+// outside this task's scope, flagged separately. Testing the exported merge
+// function directly still exercises the exact code background.js calls.
+
+describe('background/context.js: reconcileRetryGroups (RR-10, A4)', () => {
+  it('RR-10: uses the passed-in pre-reconcile counts for quarantine, not a retryState-internal recompute', async () => {
+    const { reconcileRetryGroups } = await import('../background/context.js');
+    const { ShadowState } = await import('../shared/shadow-state.js');
+
+    const retryState = new ShadowState();
+    retryState.groups.set(10, { id: 10, title: 'Old Group', color: 'blue', collapsed: false, windowId: 1 });
+
+    const liveState = new ShadowState(); // no group 10 progress on the live side
+
+    // Group 10 is not live on the retry's own query — it gets quarantined.
+    // savedGroupTabCounts is the pre-reconcile snapshot (2a) — must be used
+    // verbatim, not recomputed from retryState.tabs post-reconcile.
+    reconcileRetryGroups(retryState, /* retryGroups */ [], new Map([[10, 2]]), new Map(), liveState);
+
+    assert.equal(retryState.orphanedGroups.get(10)?.count, 2, 'quarantine count used the passed-in pre-reconcile map, not a post-reconcile live-groupId recompute');
+  });
+
+  it('A4: merges live groupColors, group title/color, and orphanedGroups progress into retryState before the swap', async () => {
+    const { reconcileRetryGroups } = await import('../background/context.js');
+    const { ShadowState } = await import('../shared/shadow-state.js');
+
+    const retryState = new ShadowState();
+    retryState.groups.set(10, { id: 10, title: '', color: 'grey', collapsed: false, windowId: 1 });
+
+    const liveState = new ShadowState();
+    liveState.groups.set(10, { id: 10, title: 'Renamed Live', color: 'red', collapsed: true, windowId: 1 });
+    liveState.groupColors[10] = '#ff00ff';
+    liveState.orphanedGroups.set(20, {
+      id: 20, title: 'Removed While Live', color: 'purple', collapsed: false,
+      rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now(),
+    });
+
+    reconcileRetryGroups(
+      retryState,
+      [{ id: 10, title: '', color: 'grey', collapsed: false, windowId: 1 }],
+      new Map(),
+      new Map(),
+      liveState
+    );
+
+    assert.equal(retryState.groups.get(10).title, 'Renamed Live', 'live title merged in over the retry copy\'s untitled default');
+    assert.equal(retryState.groups.get(10).color, 'red', 'live color merged in over the retry copy\'s default color');
+    assert.equal(retryState.groupColors[10], '#ff00ff', 'live groupColors override merged in');
+    assert.ok(retryState.orphanedGroups.has(20), 'live-only quarantine entry merged in — swap must not regress it');
+  });
+
+  it('A4: does not resurrect a group into retryState.groups if the retry\'s own reconcile already quarantined it', async () => {
+    const { reconcileRetryGroups } = await import('../background/context.js');
+    const { ShadowState } = await import('../shared/shadow-state.js');
+
+    const retryState = new ShadowState();
+    retryState.groups.set(10, { id: 10, title: 'Old Group', color: 'blue', collapsed: false, windowId: 1 });
+
+    const liveState = new ShadowState();
+    liveState.groups.set(10, { id: 10, title: 'Old Group', color: 'blue', collapsed: false, windowId: 1 });
+    liveState.groupColors[10] = '#ff00ff';
+
+    // Group 10 is NOT live on the retry's own query — gets quarantined.
+    reconcileRetryGroups(retryState, [], new Map([[10, 2]]), new Map(), liveState);
+
+    assert.equal(retryState.groups.has(10), false, 'group 10 stays quarantined, not resurrected into groups by the merge');
+    assert.equal(retryState.groupColors[10], undefined, 'groupColors merge only applies to ids retryState still tracks in groups');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: context.js persistence and sweep (A5, A6, 2d)
+// ---------------------------------------------------------------------------
+
+describe('background/context.js: persistence and sweep (A5, A6, 2d)', () => {
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('A6: saveStateImmediate cancels a pending debounced saveState', async () => {
+    const setCalls = [];
+    globalThis.chrome = {
+      storage: { local: { set: async (obj) => { setCalls.push(obj); } } },
+      runtime: { sendMessage: async () => {} },
+    };
+    const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+    const context = createContext();
+
+    context.saveState(); // schedules a 500ms debounced write
+    context.saveStateImmediate(); // writes now AND must cancel the pending one
+
+    assert.equal(setCalls.length, 1, 'immediate save wrote exactly once synchronously');
+
+    await new Promise((r) => setTimeout(r, 650)); // past the original debounce window
+
+    assert.equal(setCalls.length, 1, 'the cancelled debounce never fired a second write');
+  });
+
+  it('A5: retryMissingGroupTitles single-flights — a re-trigger while running is queued, not run concurrently', async () => {
+    globalThis.chrome = {
+      storage: { local: { set: async () => {} } },
+      runtime: { sendMessage: async () => {} },
+      tabGroups: { query: async () => [], update: async () => ({}) },
+    };
+    const originalSetTimeout = globalThis.setTimeout;
+    const scheduled = [];
+    globalThis.setTimeout = (fn, ms) => { scheduled.push({ fn, ms }); return 0; }; // never actually fires
+    try {
+      const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+      const context = createContext();
+
+      context.retryMissingGroupTitles();
+      context.retryMissingGroupTitles(); // re-trigger while "in flight"
+
+      assert.equal(scheduled.length, 1, 'the second call was queued (rerunRequested), not a second concurrent attempt() chain');
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
+  it('2d: retryMissingGroupTitles rescues a matched orphaned title via chrome.tabGroups.update', async () => {
+    const updateCalls = [];
+    globalThis.chrome = {
+      storage: { local: { set: async () => {} } },
+      runtime: { sendMessage: async () => {} },
+      tabGroups: {
+        query: async () => [{ id: 5, title: '', color: 'blue', collapsed: false, windowId: 1 }],
+        update: async (id, changes) => { updateCalls.push({ id, changes }); return {}; },
+      },
+    };
+    try {
+      const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+      const context = createContext();
+
+      // A live, tracked, untitled group with 1 member tab, and a matching
+      // quarantined orphan of the same color/window/count.
+      context.state.addTab(1, { tabId: 1, parentId: null, groupId: 5, title: 'T', url: 'https://x.com', index: 0, windowId: 1 });
+      context.state.addGroup({ id: 5, title: '', color: 'blue', collapsed: false, windowId: 1 });
+      context.state.orphanedGroups.set(99, {
+        id: 99, title: 'Rescued Title', color: 'blue', collapsed: false,
+        rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now(),
+      });
+
+      context.retryMissingGroupTitles();
+
+      await new Promise((r) => setTimeout(r, 2200));
+
+      assert.equal(updateCalls.length, 1, 'chrome.tabGroups.update called to push the rescued title');
+      assert.equal(updateCalls[0].id, 5);
+      assert.equal(updateCalls[0].changes.title, 'Rescued Title');
+    } finally {
+      delete globalThis.chrome;
+    }
   });
 });
 
@@ -881,9 +1139,53 @@ describe('message handler', () => {
     await new Promise((r) => setTimeout(r, 600));
 
     const setCalls = chromeMock.storage.local.set.mock.calls;
-    const lastSetCall = setCalls[setCalls.length - 1];
-    const savedState = lastSetCall.arguments[0].linkmap_state;
-    assert.equal(savedState.groupColors[5], '#ff0000');
+    const savedState = setCalls
+      .map((c) => c.arguments[0].linkmap_state)
+      .find((s) => s.groupColors && s.groupColors[5] === '#ff0000');
+    assert.ok(savedState, 'a storage.local.set call persisted the new group color');
+  });
+
+  // A10/Phase 5: SET_GROUP_COLOR is a group-structural mutation and must be
+  // write-through (commitStateNow) — the save observed synchronously, with
+  // no debounce wait needed (unlike the legacy commitState() path above).
+  it('writes SET_GROUP_COLOR through commitStateNow without waiting for the debounce', async () => {
+    await loadBackground(chromeMock);
+    chromeMock.storage.local.set.mock.resetCalls();
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener(
+      { type: 'SET_GROUP_COLOR', payload: { groupId: 9, color: '#00ff00' } },
+      {},
+      () => {}
+    );
+
+    // Immediate save — no 500ms debounce wait required.
+    await new Promise((r) => setTimeout(r, 10));
+
+    const setCall = chromeMock.storage.local.set.mock.calls.find(
+      (c) => c.arguments[0]?.linkmap_state?.groupColors?.[9] === '#00ff00'
+    );
+    assert.ok(setCall, 'group color persisted immediately, before any debounce would have fired');
+  });
+
+  // A10/Phase 5: RENAME_GROUP is likewise write-through.
+  it('writes RENAME_GROUP through commitStateNow without waiting for the debounce', async () => {
+    await loadBackground(chromeMock);
+    chromeMock.storage.local.set.mock.resetCalls();
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener(
+      { type: 'RENAME_GROUP', payload: { groupId: 5, title: 'Research' } },
+      {},
+      () => {}
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const setCall = chromeMock.storage.local.set.mock.calls.find(
+      (c) => c.arguments[0]?.linkmap_state?.groups?.[5]?.title === 'Research'
+    );
+    assert.ok(setCall, 'group title persisted immediately, before any debounce would have fired');
   });
 
   it('handles PIN_TAB by calling chrome.tabs.update with pinned', async () => {
@@ -938,6 +1240,328 @@ describe('message handler', () => {
       (c) => c.arguments[0] === 1 && c.arguments[1]?.muted === true
     );
     assert.ok(updateCall, 'chrome.tabs.update called with muted: true');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: MOVE_TAB group membership sync (CAE-4/A9)
+// ---------------------------------------------------------------------------
+
+describe('MOVE_TAB group sync (CAE-4/A9)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('sends chrome.tabs.ungroup with the dragged tab when dropped outside any group (drag-out)', async () => {
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true, groupId: 5 })];
+      return [
+        makeChromeTab({ id: 1, index: 0, groupId: 5 }),
+        makeChromeTab({ id: 2, index: 1, groupId: -1 }),
+      ];
+    });
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener(
+      { type: 'MOVE_TAB', payload: { tabId: 1, newParentId: null, targetTabId: 2, position: 'before', targetGroupId: -1 } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.equal(chromeMock.tabs.ungroup.mock.callCount(), 1, 'chrome.tabs.ungroup called once');
+    assert.deepEqual(chromeMock.tabs.ungroup.mock.calls[0].arguments[0], [1]);
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 0);
+  });
+
+  it('groups the tab and its non-pinned descendant subtree when dropped into a group (drag-in, 4b/A9)', async () => {
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, groupId: -1 }),
+        makeChromeTab({ id: 2, index: 1, groupId: -1 }),
+        makeChromeTab({ id: 3, index: 2, groupId: 7 }),
+      ];
+    });
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    // Reparent tab 2 under tab 1 first so it becomes a descendant.
+    listener({ type: 'MOVE_TAB', payload: { tabId: 2, newParentId: 1, targetTabId: 1, position: 'child' } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    listener(
+      { type: 'MOVE_TAB', payload: { tabId: 1, newParentId: null, targetTabId: 3, position: 'before', targetGroupId: 7 } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 1);
+    const call = chromeMock.tabs.group.mock.calls[0].arguments[0];
+    assert.deepEqual(call.tabIds, [1, 2], 'both the dragged tab and its descendant are grouped together');
+    assert.equal(call.groupId, 7);
+  });
+
+  it('excludes pinned descendants from the group sync call', async () => {
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, groupId: -1 }),
+        makeChromeTab({ id: 2, index: 1, groupId: -1, pinned: true }),
+        makeChromeTab({ id: 3, index: 2, groupId: 7 }),
+      ];
+    });
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener({ type: 'MOVE_TAB', payload: { tabId: 2, newParentId: 1, targetTabId: 1, position: 'child' } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    listener(
+      { type: 'MOVE_TAB', payload: { tabId: 1, newParentId: null, targetTabId: 3, position: 'before', targetGroupId: 7 } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 1);
+    assert.deepEqual(chromeMock.tabs.group.mock.calls[0].arguments[0].tabIds, [1], 'pinned descendant (2) excluded');
+  });
+
+  it('repairs shadow state groupId from chrome.tabs.get when the sync call fails (A9)', async () => {
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true, groupId: 5 })];
+      return [
+        makeChromeTab({ id: 1, index: 0, groupId: 5 }),
+        makeChromeTab({ id: 2, index: 1, groupId: -1 }),
+      ];
+    });
+    chromeMock.tabs.ungroup = mock.fn(async () => { throw new Error('ungroup failed'); });
+    chromeMock.tabs.get = mock.fn(async (id) => ({ id, pinned: false, groupId: 8 }));
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener(
+      { type: 'MOVE_TAB', payload: { tabId: 1, newParentId: null, targetTabId: 2, position: 'before', targetGroupId: -1 } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(chromeMock.tabs.get.mock.callCount(), 1, 'repair fetches the live tab');
+
+    let response = null;
+    listener({ type: 'GET_STATE' }, {}, (data) => { response = data; });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(response.tabs[1].groupId, 8, 'shadow state repaired to the live groupId, not left stale or optimistically wrong');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: MOVE_TO_GROUP groups descendants + write-through (4b/A10a)
+// ---------------------------------------------------------------------------
+
+describe('MOVE_TO_GROUP groups descendants and write-through (4b/A10a)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0 }),
+        makeChromeTab({ id: 2, index: 1 }),
+      ];
+    });
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('groups the tab and its descendants, sets groupId on every moved id before the immediate commit', async () => {
+    chromeMock.tabs.get = mock.fn(async (id) => ({ id, pinned: false }));
+    chromeMock.tabs.group = mock.fn(async () => 42);
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    // Reparent tab 2 under tab 1 first so it becomes a descendant.
+    listener({ type: 'MOVE_TAB', payload: { tabId: 2, newParentId: 1, targetTabId: 1, position: 'child' } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    let response = null;
+    listener({ type: 'MOVE_TO_GROUP', payload: { tabId: 1, groupId: null } }, {}, (r) => { response = r; });
+    // A10a/Phase 5: immediate commit — no 500ms debounce wait needed.
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.deepEqual(response, { groupId: 42 });
+    const groupCall = chromeMock.tabs.group.mock.calls[0].arguments[0];
+    assert.deepEqual(groupCall.tabIds, [1, 2], 'the "New Group" action groups descendants too');
+
+    let statePayload = null;
+    listener({ type: 'GET_STATE' }, {}, (d) => { statePayload = d; });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(statePayload.tabs[1].groupId, 42, 'A10a: groupId set synchronously on the primary tab');
+    assert.equal(statePayload.tabs[2].groupId, 42, 'A10a: groupId set synchronously on the descendant too');
+
+    const setCall = chromeMock.storage.local.set.mock.calls.find(
+      (c) => c.arguments[0]?.linkmap_state?.tabs?.[2]?.groupId === 42
+    );
+    assert.ok(setCall, 'write-through commit persisted the descendant groupId immediately');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: MULTI_GROUP pinned filter (A9)
+// ---------------------------------------------------------------------------
+
+describe('MULTI_GROUP pinned filter (A9)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, pinned: false }),
+        makeChromeTab({ id: 2, index: 1, pinned: true }),
+        makeChromeTab({ id: 3, index: 2, pinned: false }),
+      ];
+    });
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('filters pinned tab ids out before calling chrome.tabs.group', async () => {
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener({ type: 'MULTI_GROUP', payload: { tabIds: [1, 2, 3] } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 1);
+    assert.deepEqual(chromeMock.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 3]);
+  });
+
+  it('does not call chrome.tabs.group when every selected tab is pinned', async () => {
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    listener({ type: 'MULTI_GROUP', payload: { tabIds: [2] } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(chromeMock.tabs.group.mock.callCount(), 0, 'a single pinned id would reject the whole call, so it is filtered to empty and skipped');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: onGroupRemoved resets member tabs + write-through (A10b/Phase 5)
+// ---------------------------------------------------------------------------
+
+describe('onGroupRemoved resets member tabs before write-through save (A10b)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true })];
+      return [
+        makeChromeTab({ id: 1, index: 0, groupId: 5 }),
+        makeChromeTab({ id: 2, index: 1, groupId: 5 }),
+        makeChromeTab({ id: 3, index: 2, groupId: -1 }),
+      ];
+    });
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('resets every tab pointing at the removed group to UNGROUPED_GROUP_ID before the immediate save', async () => {
+    await loadBackground(chromeMock);
+    chromeMock.storage.local.set.mock.resetCalls();
+
+    chromeMock.tabGroups.onRemoved._fire({ id: 5, windowId: 1 });
+    // Phase 5: write-through — immediate, no debounce wait needed.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    let response = null;
+    listener({ type: 'GET_STATE' }, {}, (d) => { response = d; });
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(response.tabs[1].groupId, -1, 'tab 1 reset off the dead group');
+    assert.equal(response.tabs[2].groupId, -1, 'tab 2 reset off the dead group');
+    assert.equal(response.tabs[3].groupId, -1, 'unrelated tab untouched');
+
+    const setCall = chromeMock.storage.local.set.mock.calls.find(
+      (c) => c.arguments[0]?.linkmap_state?.tabs?.[1]?.groupId === -1
+        && c.arguments[0]?.linkmap_state?.tabs?.[2]?.groupId === -1
+    );
+    assert.ok(setCall, 'the reset landed in storage before/without waiting on the debounce');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: runtime.onSuspend write-through (A10c)
+// ---------------------------------------------------------------------------
+
+describe('runtime.onSuspend write-through (A10c)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('routes the suspend flush through the immediate serializer and logs success only after the write settles', async () => {
+    // Init itself performs one immediate save (2f/A6), and other test files'
+    // long-since-completed-but-still-pending 500ms debounces can in principle
+    // fire during loadBackground()'s internal settle wait. Install the
+    // recording mock only AFTER loadBackground resolves, and fire onSuspend
+    // in the SAME synchronous tick (no intervening await) — no macrotask can
+    // interleave between "install" and "assert", so the very next
+    // storage.local.set call observed is deterministically onSuspend's own.
+    await loadBackground(chromeMock);
+
+    const order = [];
+    let resolveSet;
+    chromeMock.storage.local.set = mock.fn(() => {
+      order.push('set-called');
+      return new Promise((resolve) => {
+        resolveSet = () => { order.push('set-resolved'); resolve(); };
+      });
+    });
+
+    const originalLog = console.log;
+    console.log = (...args) => {
+      if (args[0] === '[LinkMap] State flushed on suspend') order.push('logged');
+    };
+
+    try {
+      chromeMock._listeners['runtime.onSuspend'][0]();
+      assert.deepEqual(order, ['set-called'], 'write starts synchronously; success is not logged yet');
+
+      resolveSet();
+      await new Promise((r) => setTimeout(r, 10));
+
+      assert.deepEqual(order, ['set-called', 'set-resolved', 'logged'], 'success log only fires after the write promise settles');
+    } finally {
+      console.log = originalLog;
+    }
   });
 });
 

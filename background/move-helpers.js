@@ -4,6 +4,25 @@
  * Position handlers for MOVE_TAB operations and pinned boundary logic.
  */
 
+import { UNGROUPED_GROUP_ID } from '../shared/constants.js';
+
+/**
+ * Returns [tabId, ...non-pinned descendant tabIds] — the single unified
+ * id-set used at EVERY group/ungroup call site (A9). Pinned tabs are
+ * excluded because Chrome rejects grouping (or ungrouping) a pinned tab.
+ *
+ * @param {import('../shared/shadow-state.js').ShadowState} state
+ * @param {number} tabId
+ * @returns {number[]}
+ */
+export function collectGroupableTabIds(state, tabId) {
+  const ids = [tabId, ...state.getDescendants(tabId).map((d) => d.tabId)];
+  return ids.filter((id) => {
+    const tab = state.getTab(id);
+    return !(tab && tab.pinned);
+  });
+}
+
 /**
  * Creates move helper functions bound to a state getter and commitState.
  * @param {Function} getState - getter that returns the current ShadowState instance
@@ -57,12 +76,21 @@ export function createMoveHelpers(getState, commitState) {
   }
 
   /**
-   * Handles drop on a group header — adds tab to end of that group.
+   * Handles drop on a group header — adds the tab AND its non-pinned
+   * descendants to the end of that group (4b/A9). Groups are per-window, so
+   * a drop from a different window moves the whole subtree into the group's
+   * window first, then groups it in one call (4c/A9 — group-header drop from
+   * another window).
    * Awaits Chrome API confirmation before mutating state to prevent drift.
    * @returns {'async'}
    */
   function moveTabToGroup(tabId, targetGroupId) {
-    chrome.tabs.group({ tabIds: [tabId], groupId: targetGroupId })
+    const state = getState();
+    const sourceTab = state.getTab(tabId);
+    const targetGroup = state.groups.get(targetGroupId);
+    const ids = collectGroupableTabIds(state, tabId);
+
+    const applyGroup = () => chrome.tabs.group({ tabIds: ids, groupId: targetGroupId })
       .then(() => {
         repositionTabToGroup(tabId, targetGroupId);
         commitState();
@@ -70,6 +98,16 @@ export function createMoveHelpers(getState, commitState) {
       .catch((err) => {
         console.error('[LinkMap] Group add failed:', err);
       });
+
+    if (sourceTab && targetGroup && sourceTab.windowId !== targetGroup.windowId) {
+      chrome.tabs.move(ids, { windowId: targetGroup.windowId, index: -1 })
+        .then(applyGroup)
+        .catch((err) => {
+          console.error('[LinkMap] Cross-window group-header move failed:', err);
+        });
+    } else {
+      applyGroup();
+    }
     return 'async';
   }
 
@@ -86,17 +124,50 @@ export function createMoveHelpers(getState, commitState) {
   }
 
   /**
-   * Handles reparenting — makes tabId a child of parentId.
+   * After a cross-window subtree move confirms, (re)group or ungroup the
+   * moved set per targetGroupId (4c/A9). No-op when targetGroupId wasn't
+   * supplied (drop wasn't group-aware), and skips the ungroup call when the
+   * tab wasn't grouped to begin with (nothing to undo).
+   * @param {number[]} ids
+   * @param {number|undefined} targetGroupId
+   * @param {number|undefined} wasGrouped - the moved tab's groupId before the move
+   * @returns {Promise<void>}
+   */
+  function syncGroupAfterWindowMove(ids, targetGroupId, wasGrouped) {
+    if (targetGroupId === undefined) return Promise.resolve();
+    if (targetGroupId === UNGROUPED_GROUP_ID) {
+      if (wasGrouped === undefined || wasGrouped === UNGROUPED_GROUP_ID) return Promise.resolve();
+      return chrome.tabs.ungroup(ids).catch((err) => {
+        console.error('[LinkMap] Cross-window ungroup failed:', err);
+      });
+    }
+    return chrome.tabs.group({ tabIds: ids, groupId: targetGroupId }).catch((err) => {
+      console.error('[LinkMap] Cross-window group failed:', err);
+    });
+  }
+
+  /**
+   * Handles reparenting — makes tabId a child of parentId. A cross-window
+   * move carries the tab's full non-pinned subtree and, when targetGroupId
+   * is supplied, (re)groups/ungroups it once the window move confirms (4c/A9).
    * @returns {'sync'|'async'}
    */
-  function moveTabAsChild(tabId, parentId, needsWindowMove, targetWindowId) {
+  function moveTabAsChild(tabId, parentId, needsWindowMove, targetWindowId, targetGroupId) {
     if (needsWindowMove) {
-      chrome.tabs.move(tabId, { windowId: targetWindowId, index: -1 }).then(() => {
-        getState().moveTab(tabId, parentId, 0);
-        commitState();
-      }).catch((err) => {
-        console.error('[LinkMap] Cross-window move failed:', err);
-      });
+      const state = getState();
+      const wasGrouped = state.getTab(tabId)?.groupId;
+      const ids = collectGroupableTabIds(state, tabId);
+      chrome.tabs.move(ids, { windowId: targetWindowId, index: -1 })
+        .then(() => {
+          getState().moveTab(tabId, parentId, 0);
+          return syncGroupAfterWindowMove(ids, targetGroupId, wasGrouped);
+        })
+        .then(() => {
+          commitState();
+        })
+        .catch((err) => {
+          console.error('[LinkMap] Cross-window move failed:', err);
+        });
       return 'async';
     }
     getState().moveTab(tabId, parentId, 0);
@@ -104,10 +175,12 @@ export function createMoveHelpers(getState, commitState) {
   }
 
   /**
-   * Handles before/after reordering within siblings.
+   * Handles before/after reordering within siblings. A cross-window move
+   * carries the tab's full non-pinned subtree and, when targetGroupId is
+   * supplied, (re)groups/ungroups it once the window move confirms (4c/A9).
    * @returns {'sync'|'async'}
    */
-  function moveTabBeforeAfter(tabId, parentId, targetTabId, position, needsWindowMove, targetWindowId) {
+  function moveTabBeforeAfter(tabId, parentId, targetTabId, position, needsWindowMove, targetWindowId, targetGroupId) {
     const state = getState();
     const siblings = parentId != null
       ? (state.getTab(parentId)?.children || [])
@@ -124,12 +197,19 @@ export function createMoveHelpers(getState, commitState) {
       }
     }
     if (needsWindowMove) {
-      chrome.tabs.move(tabId, { windowId: targetWindowId, index: -1 }).then(() => {
-        getState().moveTab(tabId, parentId, targetIndex);
-        commitState();
-      }).catch((err) => {
-        console.error('[LinkMap] Cross-window move failed:', err);
-      });
+      const wasGrouped = state.getTab(tabId)?.groupId;
+      const ids = collectGroupableTabIds(state, tabId);
+      chrome.tabs.move(ids, { windowId: targetWindowId, index: -1 })
+        .then(() => {
+          getState().moveTab(tabId, parentId, targetIndex);
+          return syncGroupAfterWindowMove(ids, targetGroupId, wasGrouped);
+        })
+        .then(() => {
+          commitState();
+        })
+        .catch((err) => {
+          console.error('[LinkMap] Cross-window move failed:', err);
+        });
       return 'async';
     }
     state.moveTab(tabId, parentId, targetIndex);

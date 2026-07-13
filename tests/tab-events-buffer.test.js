@@ -54,6 +54,7 @@ function createMockContext(state) {
     ctx,
     state,
     commitState() {},
+    commitStateNow() {},
     broadcastState() {},
     invalidateDuplicateMap() {},
     suppressGroupCollapseForBurst() {},

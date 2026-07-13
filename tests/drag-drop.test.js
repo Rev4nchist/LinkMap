@@ -204,6 +204,34 @@ describe('buildMovePayload', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: resolveTargetGroupId (CAE-4)
+// ---------------------------------------------------------------------------
+
+describe('resolveTargetGroupId (CAE-4)', () => {
+  let resolveTargetGroupId;
+  let UNGROUPED_GROUP_ID;
+
+  beforeEach(async () => {
+    const mod = await import('../sidepanel/modules/drag-drop.js');
+    resolveTargetGroupId = mod._testing.resolveTargetGroupId;
+    ({ UNGROUPED_GROUP_ID } = await import('../shared/constants.js'));
+  });
+
+  it('resolves a numeric group id dataset value', () => {
+    assert.equal(resolveTargetGroupId('42'), 42);
+  });
+
+  it('falls back to UNGROUPED_GROUP_ID for the stamped "-1" (drop outside any group)', () => {
+    assert.equal(resolveTargetGroupId('-1'), UNGROUPED_GROUP_ID);
+  });
+
+  it('falls back to UNGROUPED_GROUP_ID for a missing/non-numeric dataset value', () => {
+    assert.equal(resolveTargetGroupId(undefined), UNGROUPED_GROUP_ID);
+    assert.equal(resolveTargetGroupId('not-a-number'), UNGROUPED_GROUP_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: Background MOVE_TAB handler logic
 // (Tests the index calculation for reorder operations)
 // ---------------------------------------------------------------------------

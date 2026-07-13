@@ -193,3 +193,8 @@ export const SUPPRESS_TITLE_MS = 300;
 export const CONTEXT_MENU_DELAY_MS = 150;
 export const SESSION_REFRESH_DELAY_MS = 300;
 export const RETRY_GROUP_TITLE_DELAYS = [2000, 4000, 8000];
+
+// Orphaned-group quarantine (survives progressive session restore instead of
+// hard-deleting groups whose live counterpart hasn't appeared yet).
+export const ORPHANED_GROUP_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+export const ORPHANED_GROUP_CAP = 40;
