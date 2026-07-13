@@ -1598,3 +1598,36 @@ describe('updateGroup — windowId persistence (RR-11)', () => {
     assert.equal(s.groups.get(5).windowId, 1);
   });
 });
+
+describe('reconcileWithLiveTabs — favicon trust gate (RR-12)', () => {
+  it('preserves a saved favicon when the live icon is empty and the URL is unchanged', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ favIconUrl: 'https://example.com/saved.ico' }));
+
+    s.reconcileWithLiveTabs([makeLiveTab({ url: 'https://example.com', favIconUrl: '' })]);
+
+    assert.equal(s.tabs.get(1).favIconUrl, 'https://example.com/saved.ico');
+  });
+
+  it('clears a saved favicon when the live icon is empty and the effective URL changed', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ favIconUrl: 'https://example.com/saved.ico' }));
+
+    s.reconcileWithLiveTabs([makeLiveTab({ url: '', pendingUrl: 'https://other.test', favIconUrl: '' })]);
+
+    assert.equal(s.tabs.get(1).url, 'https://other.test');
+    assert.equal(s.tabs.get(1).favIconUrl, '');
+  });
+
+  it('uses a non-empty live favicon even when the URL is unchanged', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ favIconUrl: 'https://example.com/saved.ico' }));
+
+    s.reconcileWithLiveTabs([makeLiveTab({
+      url: 'https://example.com',
+      favIconUrl: 'https://example.com/live.ico',
+    })]);
+
+    assert.equal(s.tabs.get(1).favIconUrl, 'https://example.com/live.ico');
+  });
+});

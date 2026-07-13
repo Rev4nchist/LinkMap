@@ -8,7 +8,7 @@ globalThis.chrome = {
   storage: { local: {} }, alarms: {}, commands: {}, sidePanel: {},
 };
 
-const { getFaviconUrl } = await import('../shared/constants.js');
+const { DEFAULT_FAVICON, getFaviconUrl } = await import('../shared/constants.js');
 
 describe('getFaviconUrl — local favicons, no third-party egress (SM-1)', () => {
   it('returns the native favIconUrl when present', () => {
@@ -18,18 +18,32 @@ describe('getFaviconUrl — local favicons, no third-party egress (SM-1)', () =>
     );
   });
 
-  it('falls back to the on-device _favicon route, never google.com', () => {
-    const result = getFaviconUrl({ favIconUrl: '', url: 'https://example.com/page' });
-    assert.ok(!result.includes('google.com'), 'must not call out to google.com');
-    assert.ok(result.includes('/_favicon/'), 'uses the local _favicon route');
-    assert.ok(
-      result.includes(encodeURIComponent('https://example.com/page')),
-      'passes the page URL to the local resolver'
-    );
-  });
+  for (const url of [
+    'http://example.com/page',
+    'https://example.com/page',
+    'file:///C:/Favicons/space%20and-%E2%9C%93.html',
+  ]) {
+    it(`routes ${new URL(url).protocol} through the on-device _favicon route`, () => {
+      const result = getFaviconUrl({ favIconUrl: '', url });
+      assert.ok(!result.includes('google.com'), 'must not call out to google.com');
+      assert.ok(result.includes('/_favicon/'), 'uses the local _favicon route');
+      assert.ok(result.includes(encodeURIComponent(url)), 'passes the page URL to the local resolver');
+    });
+  }
 
-  it('returns a non-network default for non-http tabs', () => {
-    const result = getFaviconUrl({ favIconUrl: '', url: 'chrome://newtab/' });
-    assert.ok(!result.includes('google.com'), 'no third-party request for chrome:// tabs');
-  });
+  for (const url of [
+    'data:text/html,hello',
+    'blob:https://example.com/id',
+    'view-source:https://example.com/',
+    'javascript:void(0)',
+    'chrome://newtab/',
+    'chrome-extension://abc123/page.html',
+    'about:blank',
+    'edge://newtab/',
+    'devtools://devtools/bundled/inspector.html',
+  ]) {
+    it(`uses the default for ${url.split(':')[0]} URLs`, () => {
+      assert.equal(getFaviconUrl({ favIconUrl: '', url }), DEFAULT_FAVICON);
+    });
+  }
 });

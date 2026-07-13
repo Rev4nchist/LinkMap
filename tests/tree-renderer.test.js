@@ -10,6 +10,7 @@ setupMockDOM();
 // ---------------------------------------------------------------------------
 
 const { el } = await import('../shared/utils.js');
+const { DEFAULT_FAVICON } = await import('../shared/constants.js');
 const { renderTree, patchElement, getElementKey } = await import('../sidepanel/modules/tree-renderer.js');
 
 // ---------------------------------------------------------------------------
@@ -421,6 +422,48 @@ describe('renderTree', () => {
       const favicon = findAll(container, 'tab-favicon')[0];
       // Should still render an element (either img with fallback or a div)
       assert.ok(favicon, 'should render a favicon element even without URL');
+    });
+
+    it('memoizes a failed tree favicon until the candidate changes', () => {
+      const tab = makeTabNode(1, { favIconUrl: 'https://bad.test/icon.png' });
+      const state = makeState({ tabs: { 1: tab }, rootIds: [1] });
+      const { container, pinnedList } = makeContainers();
+
+      renderTree(state, null, container, pinnedList);
+      const favicon = findAll(container, 'tab-favicon')[0];
+      favicon.onerror();
+      assert.equal(favicon.dataset.failedSrc, 'https://bad.test/icon.png');
+      assert.equal(favicon.src, DEFAULT_FAVICON);
+
+      renderTree(state, null, container, pinnedList);
+      assert.equal(findAll(container, 'tab-favicon')[0].src, DEFAULT_FAVICON);
+
+      tab.favIconUrl = 'https://good.test/icon.png';
+      renderTree(state, null, container, pinnedList);
+      const recovered = findAll(container, 'tab-favicon')[0];
+      assert.equal(recovered.src, 'https://good.test/icon.png');
+      assert.equal(recovered.dataset.failedSrc, undefined);
+    });
+
+    it('memoizes a failed pinned favicon across tile rebuilds until the candidate changes', () => {
+      const tab = makeTabNode(1, { pinned: true, favIconUrl: 'https://bad.test/pinned.png' });
+      const state = makeState({ tabs: { 1: tab }, rootIds: [1] });
+      const { container, pinnedList } = makeContainers();
+
+      renderTree(state, null, container, pinnedList);
+      const first = findAll(pinnedList, 'pinned-tab')[0].querySelector('img');
+      assert.equal(typeof first.onerror, 'function');
+      first.onerror();
+      assert.equal(first.src, DEFAULT_FAVICON);
+
+      renderTree(state, null, container, pinnedList);
+      const retried = findAll(pinnedList, 'pinned-tab')[0].querySelector('img');
+      assert.equal(retried.src, DEFAULT_FAVICON);
+
+      tab.favIconUrl = 'https://good.test/pinned.png';
+      renderTree(state, null, container, pinnedList);
+      const recovered = findAll(pinnedList, 'pinned-tab')[0].querySelector('img');
+      assert.equal(recovered.src, 'https://good.test/pinned.png');
     });
   });
 

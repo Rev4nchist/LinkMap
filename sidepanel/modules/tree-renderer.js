@@ -264,7 +264,7 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     height: '16',
     alt: '',
   });
-  favicon.onerror = () => { favicon.src = DEFAULT_FAVICON; favicon.onerror = null; };
+  armFaviconFallback(favicon);
 
   // Title
   const title = el('span', { className: 'tab-title' }, tab.title || tab.url || '');
@@ -363,8 +363,26 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
  * @param {Object} tab - TabNode (pinned)
  * @returns {HTMLElement}
  */
+const failedPinnedFaviconSrcs = new Map();
+
+function armFaviconFallback(favicon, onFailure) {
+  favicon.onerror = () => {
+    const failedSrc = favicon.src;
+    if (!failedSrc || failedSrc === DEFAULT_FAVICON) return;
+    favicon.dataset.failedSrc = failedSrc;
+    onFailure?.(failedSrc);
+    favicon.src = DEFAULT_FAVICON;
+    favicon.setAttribute('src', DEFAULT_FAVICON);
+  };
+}
+
 function buildPinnedTab(tab) {
-  const faviconSrc = getFaviconUrl(tab);
+  const candidateSrc = getFaviconUrl(tab);
+  const failedSrc = failedPinnedFaviconSrcs.get(tab.tabId);
+  if (failedSrc && failedSrc !== candidateSrc) {
+    failedPinnedFaviconSrcs.delete(tab.tabId);
+  }
+  const faviconSrc = failedSrc === candidateSrc ? DEFAULT_FAVICON : candidateSrc;
 
   const favicon = el('img', {
     src: faviconSrc,
@@ -372,6 +390,8 @@ function buildPinnedTab(tab) {
     height: '16',
     alt: '',
   });
+  if (failedSrc === candidateSrc) favicon.dataset.failedSrc = candidateSrc;
+  armFaviconFallback(favicon, (src) => failedPinnedFaviconSrcs.set(tab.tabId, src));
 
   return el('div', {
     className: 'pinned-tab',
@@ -527,9 +547,15 @@ export function patchElement(existing, incoming) {
 
   const existingFav = existing.querySelector?.('.tab-favicon');
   const incomingFav = incoming.querySelector?.('.tab-favicon');
-  if (existingFav && incomingFav && existingFav.src !== incomingFav.src) {
-    existingFav.src = incomingFav.src;
-    existingFav.setAttribute('src', incomingFav.src);
+  if (existingFav && incomingFav) {
+    const candidateSrc = incomingFav.src;
+    const failedSrc = existingFav.dataset.failedSrc;
+    if (candidateSrc !== failedSrc && existingFav.src !== candidateSrc) {
+      if (failedSrc) delete existingFav.dataset.failedSrc;
+      existingFav.src = candidateSrc;
+      existingFav.setAttribute('src', candidateSrc);
+    }
+    armFaviconFallback(existingFav);
   }
 
   // Badge and note reconciliation — if child count changed (badge added/removed,

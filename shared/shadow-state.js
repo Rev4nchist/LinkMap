@@ -1045,10 +1045,15 @@ export class ShadowState {
 
     // (b) Update existing / add new.
     for (const tab of liveTabs) {
+      const effectiveUrl = tab.url || tab.pendingUrl || '';
+      const existingNode = this.tabs.get(tab.id);
+      const favIconUrl = tab.favIconUrl
+        || (existingNode?.url === effectiveUrl ? existingNode.favIconUrl : '')
+        || '';
       const changes = {
         title:      tab.title,
-        url:        tab.url || tab.pendingUrl || '',
-        favIconUrl: tab.favIconUrl ?? '',
+        url:        effectiveUrl,
+        favIconUrl,
         pinned:     tab.pinned,
         audible:    tab.audible,
         status:     tab.status,

@@ -153,7 +153,13 @@ export const DEFAULT_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
  */
 export function getFaviconUrl(tab) {
   if (tab.favIconUrl) return tab.favIconUrl;
-  if (tab.url && (tab.url.startsWith('http://') || tab.url.startsWith('https://'))) {
+  let protocol;
+  try {
+    protocol = new URL(tab.url).protocol;
+  } catch {
+    return DEFAULT_FAVICON;
+  }
+  if (protocol === 'http:' || protocol === 'https:' || protocol === 'file:') {
     try {
       return chrome.runtime.getURL(
         `/_favicon/?pageUrl=${encodeURIComponent(tab.url)}&size=32`
