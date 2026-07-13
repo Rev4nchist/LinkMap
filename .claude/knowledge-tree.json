@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-03-23T00:05:46.060566+00:00",
+  "updated_at": "2026-07-13T12:15:59.729615+00:00",
   "project": {
     "name": "LinkMap",
     "description": "",
@@ -14,40 +14,12 @@
         "purpose": "JSON data/config",
         "key_files": null
       },
-      ".claude\\cache/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
-      ".claude\\cache\\agents/": {
-        "purpose": "Agent definitions",
-        "key_files": null
-      },
-      ".claude\\cache\\agents\\kraken/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      ".claude\\cache\\agents\\oracle/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
-      ".claude\\cache\\agents\\scout/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
-      ".claude\\cache\\agents\\spark/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      ".claude\\cache\\mot/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
       ".claude\\worktrees/": {
         "purpose": "Project directory",
         "key_files": null
       },
       ".claudedocs/": {
-        "purpose": "Project directory",
+        "purpose": "Markdown documentation",
         "key_files": null
       },
       ".icon-gen/": {
@@ -106,50 +78,6 @@
         "purpose": "Helper functions",
         "key_files": null
       },
-      "thoughts/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
-      "thoughts\\shared/": {
-        "purpose": "Shared code",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\kraken-accessibility/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\kraken-background-decomposition/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\kraken-extract-modules/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\kraken-per-window-pinned/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\phase4-dx/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\phase6-test-coverage/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\track-c-multi-window-restore/": {
-        "purpose": "Markdown documentation",
-        "key_files": null
-      },
-      "thoughts\\shared\\handoffs\\window-names-track-a/": {
-        "purpose": "Project directory",
-        "key_files": null
-      },
       "vendor/": {
         "purpose": "Project directory",
         "key_files": null
@@ -160,15 +88,67 @@
   "navigation": {
     "common_tasks": {
       "add_test": [
-        "tests/"
+        "tests/",
+        "tests\\helpers/"
       ]
     },
     "entry_points": {}
   },
   "goals": {
     "source": "ROADMAP.md",
-    "current": null,
+    "current": {
+      "title": "Favicon Fixes + Forced-Restart Verification (LinkMap)",
+      "description": "Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):; F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.; Started: 2026-07-12"
+    },
     "completed": [
+      {
+        "title": "Tree-style visualization — stability hardening + bug-hunt (reconciliation correctness, crash prevention, SW lifecycle races); 43-agent review, PR #7 merged, 396 tests (2026-06-22) `902b6cd`",
+        "completed": null
+      },
+      {
+        "title": "[fix] window name lost for secondary window after Chrome restart (#9) (2026-03-24) `5fe1084`",
+        "completed": null
+      },
+      {
+        "title": "[fix] sticky pinned tabs show only current window's pins (#8) (2026-03-23) `9ce9399`",
+        "completed": null
+      },
+      {
+        "title": "[fix] use removeAttribute instead of delete on NamedNodeMap (2026-03-23) `937269e`",
+        "completed": null
+      },
+      {
+        "title": "[feat] sticky pinned tabs in multi-window mode (#8) (2026-03-23) `8a21f87`",
+        "completed": null
+      },
+      {
+        "title": "[fix] preserve branch relationships across Chrome restart (#7) (2026-03-23) `b3210d0`",
+        "completed": null
+      },
+      {
+        "title": "Vertical tabs panel",
+        "completed": "2026-03-23"
+      },
+      {
+        "title": "Core extension scaffold",
+        "completed": "2026-03-23"
+      },
+      {
+        "title": "Task list breakdown",
+        "completed": "2026-03-23"
+      },
+      {
+        "title": "PRD creation",
+        "completed": "2026-03-23"
+      },
+      {
+        "title": "PRD: LinkMap — Vertical Tabs & Link Map Chrome Extension [prd-linkmap.md]",
+        "completed": "2026-03-23"
+      },
+      {
+        "title": "Fix: Branch (Parent-Child) Relationships Lost After Chrome Restart",
+        "completed": "2026-03-23"
+      },
       {
         "title": "[feat] keyed DOM reconciliation, Add New Tab button, group context menu, dragover throttling (2026-03-05) `e79fc10`",
         "completed": null
@@ -232,27 +212,7 @@
     ],
     "planned": [
       {
-        "title": "PRD: LinkMap — Vertical Tabs & Link Map Chrome Extension [prd-linkmap.md]",
-        "priority": "medium"
-      },
-      {
-        "title": "PRD creation",
-        "priority": "high"
-      },
-      {
-        "title": "Task list breakdown",
-        "priority": "high"
-      },
-      {
-        "title": "Core extension scaffold",
-        "priority": "high"
-      },
-      {
-        "title": "Vertical tabs panel",
-        "priority": "high"
-      },
-      {
-        "title": "Tree-style visualization",
+        "title": "Fix: Tab-Group Restart-Fragility Cluster (LinkMap)",
         "priority": "high"
       },
       {

@@ -1,10 +1,12 @@
 # Project Roadmap
 
 ## Current Focus
-
-_No active goal — set one with `/roadmap focus <item>`._
+**Favicon Fixes + Forced-Restart Verification (LinkMap)**
+- Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):; F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.
+- Started: 2026-07-12
 
 ## Completed
+- [x] [fix](groups) survive forced restart with quarantine and write-through persistence (2026-07-13) `cb7ecfe`
 - [x] Tree-style visualization — stability hardening + bug-hunt (reconciliation correctness, crash prevention, SW lifecycle races); 43-agent review, PR #7 merged, 396 tests (2026-06-22) `902b6cd`
 - [x] [fix] window name lost for secondary window after Chrome restart (#9) (2026-03-24) `5fe1084`
 - [x] [fix] sticky pinned tabs show only current window's pins (#8) (2026-03-23) `9ce9399`
@@ -34,9 +36,22 @@ _No active goal — set one with `/roadmap focus <item>`._
 - [x] Project initialization (2026-02-25)
 
 ## Planned
+- [ ] Fix: Tab-Group Restart-Fragility Cluster (LinkMap) (high priority)
 - [ ] Theming engine (medium priority)
 
 ## Recent Planning Sessions
+### 2026-07-12: Favicon Fixes + Forced-Restart Verification (LinkMap)
+**Key Decisions:**
+- Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):
+- F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.
+- F3:: `buildPinnedTab` attaches no `onerror` at all (`sidepanel/modules/tree-renderer.js:366-381`); pinned tiles rebuild through this path on every state update.
+- Manifest already has the `"favicon"` permission (`manifest.json:16`). Existing coverage: `tests/favicon.test.js` tests only `getFaviconUrl` passthrough/route/default — nothing on preservation or onerror wiring.
+- The real group-loss trigger is forced browser termination: (computer restart) — extension reload was a weak test. The implemented quarantine is designed for exactly this (persisted rescue material, 24h TTL, sweep re-arm), but it has only been verified via unit tests + a soft reload. Needs a real forced-kill verification.
+
+**Files:** shared/shadow-state.js, shared/constants.js, sidepanel/modules/tree-renderer.js, tests/favicon.test.js, tests/shadow-state.test.js, tests/tree-renderer.test.js, tests/helpers/mock-dom.js
+
+**Verification:** `node --test` fully green after Phase B (fresh output).
+
 ### 2026-03-23: Fix: Branch (Parent-Child) Relationships Lost After Chrome Restart
 **Key Decisions:**
 - The problem: Multiple bugs in the reconciliation cause matching to fail catastrophically after restart, resulting in ALL saved tabs being marked "dead" and removed — destroying all branch relationships.
@@ -44,14 +59,8 @@ _No active goal — set one with `/roadmap focus <item>`._
 - Tabs created between `chrome.tabs.query()` and `initComplete = true` are silently dropped
 - Add counter variables at top: `pass1Count`, `pass2Count`, `pass2bCount`, `pass3Count`
 - Line 854: `url: tab.url,` → `url: tab.url || tab.pendingUrl || '',` (update pass stores URL into state)
-
-**Implementation:**
 - File: `shared/shadow-state.js` — `reconcileWithLiveTabs()`
 - Add counter variables at top: `pass1Count`, `pass2Count`, `pass2bCount`, `pass3Count`
 - Increment in each pass's matching loop
 - Log summary at end: saved count, live count, matches per pass, dead removed, orphans repaired
 - Return stats alongside windowIdMap (or just log — keep return value compatible)
-
-**Files:** shared/shadow-state.js, background/tab-events.js, background.js, tests/shadow-state.test.js
-
-**Verification:** Run existing tests: `npx vitest run` — ensure no regressions
