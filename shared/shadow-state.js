@@ -583,18 +583,24 @@ export class ShadowState {
    * Preserves first-occurrence order of groups and relative order within groups.
    */
   enforceGroupContiguity() {
-    // Build map: groupId -> [tabIds in rootIds order]
+    // Build map: groupId -> [tabIds in rootIds order], real groups only.
+    // Ungrouped tabs must keep their individual positions — bucketing them
+    // as a pseudo-group coalesced every ungrouped tab at the first one's
+    // position, sinking all groups below the ungrouped block on every
+    // reconcile (each SW wake).
     const groupBuckets = new Map();
 
     for (const id of this.rootIds) {
       const tab = this.tabs.get(id);
       if (!tab) continue;
       const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
+      if (gid === UNGROUPED_GROUP_ID) continue;
       if (!groupBuckets.has(gid)) groupBuckets.set(gid, []);
       groupBuckets.get(gid).push(id);
     }
 
-    // Rebuild rootIds preserving first-occurrence order of groups
+    // Rebuild rootIds: ungrouped tabs stay in place; each group's members
+    // block together at the group's first-occurrence position.
     const seenGroups = new Set();
     const newRootIds = [];
 
@@ -603,8 +609,11 @@ export class ShadowState {
       if (!tab) continue;
       const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
 
+      if (gid === UNGROUPED_GROUP_ID) {
+        newRootIds.push(id);
+        continue;
+      }
       if (!seenGroups.has(gid)) {
-        // First time seeing this group — add all its members
         seenGroups.add(gid);
         newRootIds.push(...groupBuckets.get(gid));
       }

@@ -46,6 +46,19 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
     groupColorCache.set(id, resolveGroupColor(id, groupsMap[id], groupColors));
   }
 
+  // Group member counts across ALL tabs — members can be nested children in
+  // the shadow tree, not just roots (Chrome group membership is strip-level).
+  const groupCounts = new Map();
+  for (const t of Object.values(tabs)) {
+    const gid = t.groupId ?? UNGROUPED_GROUP_ID;
+    if (gid !== UNGROUPED_GROUP_ID) {
+      groupCounts.set(gid, (groupCounts.get(gid) || 0) + 1);
+    }
+  }
+  // Emit-once guard for group headers, shared across the whole render
+  // (a Chrome group lives in exactly one window).
+  const groupCtx = { emittedGroups: new Set(), groupCounts };
+
   // Separate pinned from non-pinned tabs
   const treeElements = [];
 
@@ -75,7 +88,7 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
         for (const childId of tab.children) {
           const child = tabs[childId];
           if (!child || child.pinned) continue;
-          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+          renderSubtree(child, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes, groupCtx);
         }
       }
     }
@@ -127,41 +140,13 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
       }
     }
 
-    // Pre-compute group member counts for this window
-    const windowGroupCounts = new Map();
+    // Render tabs for this window — group headers and collapsed-group
+    // skipping are handled inside renderSubtree so nested group members
+    // (children in the shadow tree) get headers too.
     for (const rootId of windowRootIds) {
       const tab = tabs[rootId];
       if (!tab) continue;
-      const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
-      if (gid !== UNGROUPED_GROUP_ID) {
-        windowGroupCounts.set(gid, (windowGroupCounts.get(gid) || 0) + 1);
-      }
-    }
-
-    // Render tabs for this window
-    const emittedGroups = new Set();
-    for (const rootId of windowRootIds) {
-      const tab = tabs[rootId];
-      if (!tab) continue;
-
-      const groupId = tab.groupId ?? UNGROUPED_GROUP_ID;
-
-      // Insert group header when entering a new group cluster (emit-once guard)
-      if (groupId !== UNGROUPED_GROUP_ID && !emittedGroups.has(groupId)) {
-        const group = groupsMap[groupId];
-        const memberCount = windowGroupCounts.get(groupId) || 0;
-        const resolvedColor = groupColorCache.get(groupId) || resolveGroupColor(groupId, group, groupColors);
-        treeElements.push(buildGroupHeader(groupId, group, resolvedColor, memberCount));
-        emittedGroups.add(groupId);
-      }
-
-      // Skip tabs in collapsed Chrome groups (group header remains visible)
-      if (groupId !== UNGROUPED_GROUP_ID) {
-        const group = groupsMap[groupId];
-        if (group && group.collapsed) continue;
-      }
-
-      renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+      renderSubtree(tab, 0, tabs, collapsedSet, activeTabId, treeElements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes, groupCtx);
     }
   }
 
@@ -203,8 +188,24 @@ export function renderTree(state, activeTabId, container, pinnedContainer, homeW
  * @param {Object} groupColors - Manual group color overrides
  * @param {Object} groupsMap - Chrome group data
  */
-function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes) {
+function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes, groupCtx) {
   if (depth > MAX_TREE_DEPTH) return; // guard against infinite recursion
+
+  const groupId = tab.groupId ?? UNGROUPED_GROUP_ID;
+  if (groupId !== UNGROUPED_GROUP_ID && groupCtx) {
+    // Emit the group header at the first rendered member — root OR nested
+    // child. Nested members previously rendered with no header at all,
+    // leaving Chrome-created groups with no collapse/rename affordance.
+    if (!groupCtx.emittedGroups.has(groupId)) {
+      const group = groupsMap[groupId];
+      const resolvedColor = groupColorCache.get(groupId) || resolveGroupColor(groupId, group, groupColors);
+      elements.push(buildGroupHeader(groupId, group, resolvedColor, groupCtx.groupCounts.get(groupId) || 0));
+      groupCtx.emittedGroups.add(groupId);
+    }
+    // Skip tabs in collapsed Chrome groups (group header remains visible)
+    const group = groupsMap[groupId];
+    if (group && group.collapsed) return;
+  }
 
   elements.push(buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes));
 
@@ -214,7 +215,7 @@ function renderSubtree(tab, depth, tabs, collapsedSet, activeTabId, elements, gr
       const child = tabs[childId];
       if (!child) continue;
       if (child.pinned) continue; // pinned children go to pinned section
-      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes);
+      renderSubtree(child, depth + 1, tabs, collapsedSet, activeTabId, elements, groupColors, groupsMap, groupColorCache, duplicateTabIds, visitFrequency, tabNotes, groupCtx);
     }
   }
 }

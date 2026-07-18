@@ -771,7 +771,7 @@ describe('ShadowState#enforceGroupContiguity', () => {
     assert.deepEqual(s.rootIds, [1, 2, 3, 4]);
   });
 
-  it('handles ungrouped tabs (groupId = -1) as their own group', () => {
+  it('leaves ungrouped tabs (groupId = -1) in place; group blocks at first occurrence', () => {
     const s = new ShadowState();
     s.addTab(1, makeTab({ tabId: 1, groupId: -1 }));
     s.addTab(2, makeTab({ tabId: 2, groupId: 5 }));
@@ -780,8 +780,24 @@ describe('ShadowState#enforceGroupContiguity', () => {
 
     s.enforceGroupContiguity();
 
-    // Ungrouped first (tab 1 appeared first), then group 5
-    assert.deepEqual(s.rootIds, [1, 3, 2, 4]);
+    // Group 5 blocks at tab 2's position; ungrouped tabs 1 and 3 stay put
+    assert.deepEqual(s.rootIds, [1, 2, 4, 3]);
+  });
+
+  it('does not sink a group below later ungrouped tabs (regression: groups migrated to bottom)', () => {
+    const s = new ShadowState();
+    // [ungrouped, GROUP, GROUP, ungrouped, ungrouped] — already contiguous.
+    // The old pseudo-group bucketing coalesced ALL ungrouped tabs at tab 1's
+    // position, producing [1, 4, 5, 2, 3] — the group sank to the bottom.
+    s.addTab(1, makeTab({ tabId: 1, groupId: -1 }));
+    s.addTab(2, makeTab({ tabId: 2, groupId: 5 }));
+    s.addTab(3, makeTab({ tabId: 3, groupId: 5 }));
+    s.addTab(4, makeTab({ tabId: 4, groupId: -1 }));
+    s.addTab(5, makeTab({ tabId: 5, groupId: -1 }));
+
+    s.enforceGroupContiguity();
+
+    assert.deepEqual(s.rootIds, [1, 2, 3, 4, 5]);
   });
 
   it('handles single tab', () => {
