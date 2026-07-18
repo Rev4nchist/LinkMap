@@ -1461,6 +1461,33 @@ describe('reconcileWithLiveGroups — orphaned titled groups are quarantined, no
     assert.equal(entry.orphanedAt, 1000);
   });
 
+  it('normalizes surviving quarantine window ids through windowIdMap so the map-less sweep still matches (A-4)', () => {
+    const s = new ShadowState();
+    // Two same-color titled groups in DIFFERENT windows, orphaned pre-restart.
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.groups.set(2, { id: 2, title: 'Docs', color: 'blue', collapsed: false, windowId: 20 });
+    s.reconcileWithLiveGroups([], new Map([[1, 1], [2, 1]]), new Map(), 1000);
+    assert.equal(s.orphanedGroups.size, 2, 'both same-color titled groups quarantined');
+
+    // Restart reconcile: windows 10/20 came back with new ids 110/120.
+    s.reconcileWithLiveGroups([], new Map(), new Map([[10, 110], [20, 120]]), 2000);
+    assert.equal(s.orphanedGroups.get(1).rawWindowId, 110, 'orphan 1 window normalized to current id');
+    assert.equal(s.orphanedGroups.get(2).rawWindowId, 120, 'orphan 2 window normalized to current id');
+
+    // The later MAP-LESS sweep: an untitled live group reappears in window 110.
+    // Without normalization both orphans keep stale windows (10/20), neither
+    // matches window 110, and the color-only tier refuses (2 same-color) —
+    // rescuing nothing. With normalization the window match fires correctly.
+    s.addGroup({ id: 99, title: '', color: 'blue', collapsed: false, windowId: 110 });
+    s.addTab(500, { tabId: 500, title: 't', windowId: 110, groupId: 99 });
+    const rescued = s.rescueUntitledLiveGroup({ id: 99, color: 'blue', windowId: 110 }, 3000);
+
+    assert.equal(rescued, 'Research', 'sweep matched the RIGHT same-color orphan by its normalized window');
+    assert.equal(s.groups.get(99).title, 'Research');
+    assert.ok(!s.orphanedGroups.has(1), 'matched orphan removed from quarantine');
+    assert.ok(s.orphanedGroups.has(2), 'the other same-color orphan is untouched');
+  });
+
   it('evicts the oldest quarantine entries once the cap is exceeded, always warning', () => {
     const s = new ShadowState();
     for (let i = 1; i <= ORPHANED_GROUP_CAP + 1; i++) {

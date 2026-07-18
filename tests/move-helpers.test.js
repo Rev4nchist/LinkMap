@@ -137,6 +137,7 @@ describe('moveTabAsChild cross-window group sync (4c/A9)', () => {
         group: mock.fn(async () => 700),
         ungroup: mock.fn(async () => {}),
         move: mock.fn(async () => ({})),
+        get: mock.fn(async (id) => ({ id, groupId: 700, windowId: 2 })),
       },
     };
   });
@@ -200,6 +201,7 @@ describe('moveTabBeforeAfter cross-window group sync (4c/A9)', () => {
         group: mock.fn(async () => 700),
         ungroup: mock.fn(async () => {}),
         move: mock.fn(async () => ({})),
+        get: mock.fn(async (id) => ({ id, groupId: 700, windowId: 2 })),
       },
     };
   });
@@ -213,5 +215,82 @@ describe('moveTabBeforeAfter cross-window group sync (4c/A9)', () => {
     assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2]);
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1);
     assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-4: syncGroupAfterWindowMove reconciles membership from Chrome truth.
+// A swallowed group/ungroup failure must not persist a stale groupId.
+// ---------------------------------------------------------------------------
+
+describe('cross-window group sync repairs membership from Chrome truth (B-4)', () => {
+  let state;
+  let commitState;
+  let helpers;
+
+  beforeEach(() => {
+    state = buildTree();
+    commitState = mock.fn();
+    helpers = createMoveHelpers(() => state, commitState);
+  });
+
+  it('persists the real groupId after a successful cross-window regroup', async () => {
+    globalThis.chrome = {
+      tabs: {
+        group: mock.fn(async () => 700),
+        ungroup: mock.fn(async () => {}),
+        move: mock.fn(async () => ({})),
+        get: mock.fn(async (id) => ({ id, groupId: 700, windowId: 2 })),
+      },
+    };
+
+    helpers.moveTabAsChild(1, null, true, 2, 700);
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.equal(state.getTab(1).groupId, 700, 'tab 1 groupId reconciled from chrome.tabs.get');
+    assert.equal(state.getTab(2).groupId, 700, 'child 2 groupId reconciled too');
+    assert.equal(state.getTab(1).windowId, 2, 'windowId reconciled to the destination window');
+    assert.equal(commitState.mock.callCount(), 1);
+  });
+
+  it('does NOT persist a stale groupId when the cross-window group() fails', async () => {
+    // Tab 1/2 were in group 42; group() rejects and Chrome leaves the tabs
+    // ungrouped in the new window (chrome.tabs.get reports groupId -1).
+    state.updateTab(1, { groupId: 42 });
+    state.updateTab(2, { groupId: 42 });
+    globalThis.chrome = {
+      tabs: {
+        group: mock.fn(async () => { throw new Error('group failed'); }),
+        ungroup: mock.fn(async () => {}),
+        move: mock.fn(async () => ({})),
+        get: mock.fn(async (id) => ({ id, groupId: -1, windowId: 2 })),
+      },
+    };
+
+    helpers.moveTabAsChild(1, null, true, 2, 700);
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.equal(state.getTab(1).groupId, UNGROUPED_GROUP_ID, 'stale group 42 overwritten with ungrouped truth');
+    assert.equal(state.getTab(2).groupId, UNGROUPED_GROUP_ID, 'child likewise repaired');
+    assert.equal(commitState.mock.callCount(), 1, 'commit still runs so the corrected state persists');
+  });
+
+  it('reconciles membership after a cross-window ungroup', async () => {
+    state.updateTab(1, { groupId: 42 });
+    globalThis.chrome = {
+      tabs: {
+        group: mock.fn(async () => 700),
+        ungroup: mock.fn(async () => {}),
+        move: mock.fn(async () => ({})),
+        get: mock.fn(async (id) => ({ id, groupId: -1, windowId: 2 })),
+      },
+    };
+
+    helpers.moveTabAsChild(1, null, true, 2, UNGROUPED_GROUP_ID);
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.equal(globalThis.chrome.tabs.ungroup.mock.callCount(), 1);
+    assert.equal(state.getTab(1).groupId, UNGROUPED_GROUP_ID, 'groupId cleared from chrome.tabs.get after ungroup');
+    assert.equal(commitState.mock.callCount(), 1);
   });
 });

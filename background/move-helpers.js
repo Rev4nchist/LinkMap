@@ -133,17 +133,43 @@ export function createMoveHelpers(getState, commitState) {
    * @param {number|undefined} wasGrouped - the moved tab's groupId before the move
    * @returns {Promise<void>}
    */
+  /**
+   * B-4: reconcile the moved tabs' groupId/windowId in shadow state from Chrome
+   * truth. Called after a cross-window group/ungroup attempt so that a SWALLOWED
+   * failure (or an async event that hasn't landed yet) can't leave the tabs
+   * persisted with a stale groupId. On a failed group() the tabs are ungrouped
+   * in the new window; chrome.tabs.get then reports groupId -1 and we persist
+   * that truth instead of the pre-move group.
+   * @param {number[]} ids
+   * @returns {Promise<void>}
+   */
+  function repairGroupMembership(ids) {
+    const state = getState();
+    return Promise.all(ids.map((id) =>
+      chrome.tabs.get(id)
+        .then((t) => {
+          if (t) state.updateTab(id, { groupId: t.groupId ?? UNGROUPED_GROUP_ID, windowId: t.windowId });
+        })
+        .catch(() => { /* tab closed mid-move — leave its node untouched */ })
+    )).then(() => {});
+  }
+
   function syncGroupAfterWindowMove(ids, targetGroupId, wasGrouped) {
     if (targetGroupId === undefined) return Promise.resolve();
+    let op;
     if (targetGroupId === UNGROUPED_GROUP_ID) {
       if (wasGrouped === undefined || wasGrouped === UNGROUPED_GROUP_ID) return Promise.resolve();
-      return chrome.tabs.ungroup(ids).catch((err) => {
+      op = chrome.tabs.ungroup(ids).catch((err) => {
         console.error('[LinkMap] Cross-window ungroup failed:', err);
       });
+    } else {
+      op = chrome.tabs.group({ tabIds: ids, groupId: targetGroupId }).catch((err) => {
+        console.error('[LinkMap] Cross-window group failed:', err);
+      });
     }
-    return chrome.tabs.group({ tabIds: ids, groupId: targetGroupId }).catch((err) => {
-      console.error('[LinkMap] Cross-window group failed:', err);
-    });
+    // Always reconcile membership from Chrome truth before the caller commits,
+    // whether the group/ungroup succeeded or its error was swallowed above.
+    return op.then(() => repairGroupMembership(ids));
   }
 
   /**

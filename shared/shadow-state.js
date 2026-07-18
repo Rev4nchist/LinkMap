@@ -1236,6 +1236,22 @@ export class ShadowState {
         }
       }
     }
+
+    // A-4: normalize surviving quarantine entries to the current (post-restart)
+    // window ids. The later map-less sweep (rescueUntitledLiveGroup ->
+    // _matchOrphanedGroup with no windowIdMap) compares a live group's NEW
+    // windowId against the entry's stale pre-restart rawWindowId, never matches
+    // on window, and falls to the ambiguous color-only tier — so with >=2
+    // same-color orphans it rescued NEITHER title and they expired at the TTL.
+    // Rewriting rawWindowId through the map here lets the sweep match on the
+    // real window. Empty map (a non-restart SW wake) is a no-op.
+    if (windowIdMap.size > 0) {
+      for (const entry of this.orphanedGroups.values()) {
+        if (windowIdMap.has(entry.rawWindowId)) {
+          entry.rawWindowId = windowIdMap.get(entry.rawWindowId);
+        }
+      }
+    }
   }
 
   /**
