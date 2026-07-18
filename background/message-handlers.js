@@ -686,13 +686,15 @@ export function createMessageHandler({
       case MSG.MULTI_GROUP: {
         (async () => {
           if (!payload.tabIds?.length) return;
-          // A9: a single pinned tab id rejects the whole chrome.tabs.group
-          // call — filter pinned ids out before grouping.
+          // B-3: expand each selected tab to its groupable subtree so nested
+          // children are grouped too (parity with every other group call site);
+          // otherwise the panel and Chrome strip diverge and children are
+          // ejected on restart. collectGroupableTabIds also drops pinned ids —
+          // Chrome rejects grouping a pinned tab (A9).
           const state = context.state;
-          const groupableIds = payload.tabIds.filter((id) => {
-            const tab = state.getTab(id);
-            return !(tab && tab.pinned);
-          });
+          const groupableIds = [...new Set(
+            payload.tabIds.flatMap((id) => collectGroupableTabIds(state, id)),
+          )];
           if (!groupableIds.length) return;
           try {
             const groupId = payload.groupId != null

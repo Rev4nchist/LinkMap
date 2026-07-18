@@ -143,3 +143,52 @@ describe('message handler init gating (A8 — widened INIT_GATED_TYPES/INIT_GATE
     assert.notEqual(r2, true, 'MULTI_GROUP gate does not keep the channel open');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: MULTI_GROUP descendant expansion (B-3)
+// A multi-select → Group must pull each selected tab's nested children into the
+// group too (parity with every other group call site via collectGroupableTabIds),
+// or the panel and the Chrome strip diverge and children are ejected on restart.
+// ---------------------------------------------------------------------------
+
+describe('MULTI_GROUP descendant expansion (B-3)', () => {
+  it('groups a selected parent together with its nested children', async () => {
+    const ctx = { initComplete: true, DEBUG: false, settings: {}, workspaces: [], tabNotes: {}, activeTabId: null };
+    const state = new ShadowState();
+    // root 1 with nested child 2; a separate childless root 10.
+    state.addTab(1, { tabId: 1, parentId: null, groupId: -1, title: 'Parent', url: 'https://p.com', index: 0, windowId: 1 });
+    state.addTab(2, { tabId: 2, parentId: 1, groupId: -1, title: 'Child', url: 'https://c.com', index: 1, windowId: 1 });
+    state.addTab(10, { tabId: 10, parentId: null, groupId: -1, title: 'Other', url: 'https://o.com', index: 2, windowId: 1 });
+    const handler = makeHandler(Promise.resolve(), ctx, state);
+
+    let groupedIds = null;
+    globalThis.chrome.tabs.group = async ({ tabIds }) => { groupedIds = tabIds; return 55; };
+
+    handler({ type: MSG.MULTI_GROUP, payload: { tabIds: [1, 10] } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.ok(groupedIds, 'chrome.tabs.group was called');
+    assert.deepEqual(
+      [...groupedIds].sort((a, b) => a - b),
+      [1, 2, 10],
+      'nested child 2 grouped along with selected parent 1 and root 10',
+    );
+  });
+
+  it('excludes pinned descendants (A9 safety preserved)', async () => {
+    const ctx = { initComplete: true, DEBUG: false, settings: {}, workspaces: [], tabNotes: {}, activeTabId: null };
+    const state = new ShadowState();
+    state.addTab(1, { tabId: 1, parentId: null, groupId: -1, title: 'Parent', url: 'https://p.com', index: 0, windowId: 1 });
+    state.addTab(2, { tabId: 2, parentId: 1, pinned: true, groupId: -1, title: 'Pinned child', url: 'https://c.com', index: 1, windowId: 1 });
+    const handler = makeHandler(Promise.resolve(), ctx, state);
+
+    let groupedIds = null;
+    globalThis.chrome.tabs.group = async ({ tabIds }) => { groupedIds = tabIds; return 55; };
+
+    handler({ type: MSG.MULTI_GROUP, payload: { tabIds: [1] } }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.ok(groupedIds, 'chrome.tabs.group was called');
+    assert.deepEqual([...groupedIds], [1], 'pinned descendant excluded — Chrome rejects grouping a pinned tab');
+  });
+});

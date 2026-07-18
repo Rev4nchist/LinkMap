@@ -242,12 +242,16 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       return;
     }
     const state = context.state;
+    const existing = state.groups.get(group.id);
+    // Snapshot prior structural fields BEFORE updateGroup (which may mutate
+    // the group node in place) so the write-through decision below is sound.
+    const prevTitle = existing?.title;
+    const prevColor = existing?.color;
     const updates = {
       color: group.color,
       windowId: group.windowId,
     };
     if (ctx.suppressGroupTitleCount === 0) {
-      const existing = state.groups.get(group.id);
       if (group.title || !existing?.title) {
         updates.title = group.title;
       }
@@ -256,7 +260,18 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       updates.collapsed = group.collapsed;
     }
     state.updateGroup(group.id, updates);
-    commitState();
+    // A-1: a native tab-strip rename or recolor is a structural change that
+    // must survive a forced quit inside the window. Write through immediately
+    // (like onGroupRemoved) instead of the 500ms debounce; otherwise the name
+    // is lost on kill and an empty-title group never enters quarantine —
+    // unrecoverable. Collapse-only / transient updates keep the debounced path.
+    const titleChanged = updates.title !== undefined && updates.title !== prevTitle;
+    const colorChanged = group.color !== prevColor;
+    if (titleChanged || colorChanged) {
+      commitStateNow();
+    } else {
+      commitState();
+    }
 
     ctx.DEBUG && console.log(`[LinkMap] Group updated: ${group.id} "${group.title || 'untitled'}" collapsed=${group.collapsed}${ctx.suppressGroupCollapseCount > 0 ? ' (suppressed)' : ''}`);
   }
