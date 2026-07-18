@@ -5,10 +5,11 @@ outcome: SUCCEEDED
 date: 2026-07-18 (session 2)
 session_scope: >
   dual-track session. Verified 0058574 live in Chrome. Ran the two architecture-gating
-  Phase 0 spikes (both PASS). Fixed + tested + committed stability items A-1 and B-3.
-  Opened PR #8. CodeRabbit review triaged (see below).
-branch: fix/restart-fragility (HEAD c0eae09)
-pr: https://github.com/Rev4nchist/LinkMap/pull/8  (fix/restart-fragility -> master)
+  Phase 0 spikes (both PASS). Fixed + tested stability items A-1, B-3, A-4, B-4.
+  Opened, CodeRabbit-triaged, and MERGED PR #8. ROADMAP + docs organized on master.
+branch: master (PR #8 merged as 9ce6076; fix/restart-fragility deleted)
+pr: https://github.com/Rev4nchist/LinkMap/pull/8  (MERGED 2026-07-18)
+head: master @ 2a7c117
 plan_file: C:\Users\david.hayes\.claude\plans\deep-skipping-stearns.md  # AUTHORITATIVE agent plan, incl. Risk Mitigations M1-M11
 spike_ledger: docs/agent-integration/DESIGN-RESEARCH.md  # source of truth for spike results
 prior_session_plan: C:\Users\david.hayes\.claude\plans\we-are-picking-up-sorted-pebble.md  # this session's approved plan
@@ -19,9 +20,9 @@ prior_session_plan: C:\Users\david.hayes\.claude\plans\we-are-picking-up-sorted-
 - **Both architecture-gating spikes PASS** (recorded in `docs/agent-integration/DESIGN-RESEARCH.md`):
   - **Spike 1 (#24135):** `codex exec` on `codex-cli 0.144.1` calls MCP tools WITHOUT the banned `--dangerously-bypass-approvals-and-sandbox`, under both default and `approval_policy="never"`. **#24135 does not reproduce.** The M4 no-go branch and the node-pty fallback (Spike 3) are NOT needed. `codex exec` is a viable brain transport.
   - **Spike 2 (panel WS):** the LinkMap side panel opens `ws://127.0.0.1:8181` with ZERO manifest changes; the loopback server authenticated a genuine `Origin: chrome-extension://cdapceilohcmfobgakfppmpnbnbaioen` (isChromeExt true). The panel-owned-socket + Origin-auth design holds.
-- **Stability A-1 + B-3 committed** (`52b150a`), suite **470/470 green**. A-1 = native rename/recolor write-through in `onGroupUpdated`; B-3 = MULTI_GROUP descendant expansion via `collectGroupableTabIds`.
+- **Stability A-1, B-3, A-4, B-4 all fixed + tested** (`52b150a`, `d7daa06`), suite **474/474 green**. A-1 = native rename/recolor write-through; B-3 = MULTI_GROUP descendants; A-4 = quarantine windowId normalization; B-4 = cross-window group membership repair. A-4/B-4 were CodeRabbit-corroborated.
 - **0058574 (L-1 position hold + L-2 nested header) verified live in Chrome by Dave.**
-- **PR #8 open**, CodeRabbit review status: see "CodeRabbit" section below.
+- **PR #8 MERGED** into `master` (merge commit `9ce6076`); branch deleted. ROADMAP + handoffs + audit docs organized and pushed (`master @ 2a7c117`). Working tree clean; session churn now gitignored.
 
 ## The decision fork for next session (pick first)
 
@@ -33,11 +34,11 @@ The two gating spikes passed, so the agent track is *un-blocked* but NOT *unlock
 
 Recommend surfacing this fork to Dave explicitly rather than assuming.
 
-## Next actions (in order, whichever track)
+## Next actions (start here — PR #8 is already merged to master)
 
-1. **First: merge PR #8** once CodeRabbit is addressed (see below) and Dave approves. Use the REST merge path (`gh api repos/Rev4nchist/LinkMap/pulls/8/merge -X PUT -f merge_method=...`) — `gh pr merge` is interactive/hangs on Windows.
-2. **If track A (stability):** work the audit's recommended order from `.claudedocs/group-stability-audit-2026-07-18.md`, next items = **A-4 + A-2** (pass `windowIdMap` into the sweep + re-key color-override on titled restore), then **B-2/F9** (validate Pass-1 tabId matches — URL/title sanity or session-nonce), then **F8** (workspace tabIds remap), **F7** (persisted crash flag), **B-1** (durable lineage key — bigger design work).
-3. **If track B (spikes):** run Spikes 4-9 from the plan table; Spike 4 also verifies M5 (>2-min approval-latency survival). Record each in `docs/agent-integration/DESIGN-RESEARCH.md`.
+**First move: resolve the decision fork above with Dave.** Then, by track:
+1. **Track A (stability):** work the audit's recommended order from `.claudedocs/group-stability-audit-2026-07-18.md`. Next item = **A-2** (re-key color-override on the titled-restore path — the A-4 fix already normalizes the quarantine so the material is there), then **B-2/F9** (validate Pass-1 tabId matches — URL/title sanity or session-nonce), **F8** (workspace tabIds remap), **F7** (persisted crash flag), **B-1** (durable lineage key — bigger design work). Also fold in CodeRabbit's remaining PR #8 items (see CodeRabbit section): move-helpers cross-window pinned-descendant, context.js persist-observability + retry-chain, negativeKeySeq (A-7), and the `moveTabToGroup` swallow-and-commit sibling of B-4.
+2. **Track B (spikes):** run Spikes 4-9 from the plan table; Spike 4 also verifies M5 (>2-min approval-latency survival). Record each in `docs/agent-integration/DESIGN-RESEARCH.md`. Reusable rigs were in the session scratchpad (`echo-mcp.mjs`, `ws-probe-server.mjs`) — relocate to a permanent harness dir first (see Hard-won knowledge).
 
 ## Open LinkMap stability queue (competing priority — from the audit)
 
