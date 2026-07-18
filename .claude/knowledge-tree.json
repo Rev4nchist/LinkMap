@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-07-13T12:15:59.729615+00:00",
+  "updated_at": "2026-07-18T18:08:36.226229+00:00",
   "project": {
     "name": "LinkMap",
     "description": "",
@@ -97,10 +97,18 @@
   "goals": {
     "source": "ROADMAP.md",
     "current": {
-      "title": "Favicon Fixes + Forced-Restart Verification (LinkMap)",
-      "description": "Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):; F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.; Started: 2026-07-12"
+      "title": "LinkMap Agent — Codex-Powered Browser Agent (Plan v1)",
+      "description": "BLOCKER to probe: codex issue #24135: — headless `codex exec` auto-cancels MCP tool calls (closed stdin ≈ approval rejection); the documented workaround is `--dangerously-bypass-approvals-and-sandbox`, unacceptable per `codex-worker-safety.md`. Must live-probe on our 0.144.1 before lock-in. Fallback: long-lived interactive codex behind a pty (node-pty), also unproven on Windows.; Bridge transport: side-panel-owned WebSocket: to `ws://127.0.0.1:<port>` — zero manifest changes, sidesteps MV3's 30s SW kill (panel is a long-lived DOM page). Native messaging rejected (per-connection host process fights a daemon; registry install; 1MB cap; stdio framing bugs) but kept as future out-of-band token channel. **Non-negotiable auth:* bind loopback only, verify `Origin === chrome-extension://<id>`, mutual challenge-response pairing token (any web page can probe loopback WS; port-squatting is real).; Started: 2026-07-18"
     },
     "completed": [
+      {
+        "title": "[fix](favicons) preserve across restart, harden fallbacks, support file URLs (2026-07-13) `743af87`",
+        "completed": null
+      },
+      {
+        "title": "[fix](groups) survive forced restart with quarantine and write-through persistence (2026-07-13) `cb7ecfe`",
+        "completed": null
+      },
       {
         "title": "Tree-style visualization — stability hardening + bug-hunt (reconciliation correctness, crash prevention, SW lifecycle races); 43-agent review, PR #7 merged, 396 tests (2026-06-22) `902b6cd`",
         "completed": null
@@ -212,6 +220,10 @@
     ],
     "planned": [
       {
+        "title": "Favicon Fixes + Forced-Restart Verification (LinkMap)",
+        "priority": "high"
+      },
+      {
         "title": "Fix: Tab-Group Restart-Fragility Cluster (LinkMap)",
         "priority": "high"
       },
@@ -223,5 +235,7 @@
   },
   "critical_info": {
     "claude_config": "CLAUDE.md"
-  }
+  },
+  "_stale": true,
+  "_invalidated_at": "2026-07-18T23:49:19.575Z"
 }

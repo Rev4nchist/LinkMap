@@ -1,11 +1,19 @@
 # Project Roadmap
 
 ## Current Focus
-**Favicon Fixes + Forced-Restart Verification (LinkMap)**
-- Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):; F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.
-- Started: 2026-07-12
+**PR #8 merged (2026-07-18)** — restart-fragility hardening + Phase 0 agent spikes are on `master` (`9ce6076`). 474 tests green. Fixes shipped: L-1/L-2 (sidebar position + nested-group headers), A-1 (native rename/recolor write-through), B-3 (MULTI_GROUP descendants), A-4 (quarantine windowId normalization), B-4 (cross-window group repair).
+
+Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: groundwork continues, but the Phase 1 build stays gated (elephant-2) on closing the remaining tab-group stability queue first.
+- Both architecture-gating spikes **PASS** (`docs/agent-integration/DESIGN-RESEARCH.md`): Spike 1 — #24135 does NOT reproduce on codex 0.144.1 (MCP tool calls complete without the `--dangerously-bypass-approvals-and-sandbox` flag); Spike 2 — panel-owned loopback WebSocket authenticates a real `chrome-extension://<id>` Origin with zero manifest changes. The #24135 blocker is resolved.
+- Decision fork for next session: (A) finish the stability queue, (B) run spikes 4-9, or (C) start agent Phase 1. See `thoughts/shared/handoffs/linkmap-agent-phase0/current.md`.
+- Started: 2026-07-18
 
 ## Completed
+- [x] **PR #8 merged** — restart-fragility hardening (L-1/L-2, A-1/B-3/A-4/B-4) + Phase 0 agent spikes 1-2 (2026-07-18) `9ce6076`
+- [x] fix(groups): normalize quarantine windowId (A-4); repair cross-window group membership (B-4) (2026-07-18) `d7daa06`
+- [x] docs(agent): record Phase 0 Spike 1 (#24135) and Spike 2 (panel WS) results (2026-07-18) `c0eae09`
+- [x] fix(groups): write-through native rename/recolor (A-1); group descendants in MULTI_GROUP (B-3) (2026-07-18) `52b150a`
+- [x] fix(favicons): preserve across restart, harden fallbacks, support file URLs (2026-07-13) `743af87`
 - [x] [fix](groups) survive forced restart with quarantine and write-through persistence (2026-07-13) `cb7ecfe`
 - [x] Tree-style visualization — stability hardening + bug-hunt (reconciliation correctness, crash prevention, SW lifecycle races); 43-agent review, PR #7 merged, 396 tests (2026-06-22) `902b6cd`
 - [x] [fix] window name lost for secondary window after Chrome restart (#9) (2026-03-24) `5fe1084`
@@ -36,21 +44,21 @@
 - [x] Project initialization (2026-02-25)
 
 ## Planned
-- [ ] Fix: Tab-Group Restart-Fragility Cluster (LinkMap) (high priority)
+- [ ] Tab-group stability queue (remaining): A-2 color-override on titled restore, B-2/F9 Pass-1 tabId validation, F8 workspace tabId remap, F7 persisted crash-recovery flag, B-1 durable lineage key (high priority)
+- [ ] CodeRabbit PR #8 open items: move-helpers cross-window pinned-descendant, context.js persist-observability + retry-chain, negativeKeySeq (A-7), moveTabToGroup swallow-and-commit sibling (medium priority)
+- [ ] Agent Phase 0 spikes 4-9: Neon reconnect, Notion 2025-09-03 upsert, keyring, tokens-per-task, page-action fidelity (medium priority; agent track)
+- [ ] Agent Phase 1 — read-only "ask my browser" spine (gated on the stability queue above)
 - [ ] Theming engine (medium priority)
 
 ## Recent Planning Sessions
+### 2026-07-18: Planning Session
 ### 2026-07-12: Favicon Fixes + Forced-Restart Verification (LinkMap)
 **Key Decisions:**
-- Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles* for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):
+- Blank favicons: for claude.ai / platform.claude.com (pinned + tree entries) and **grey circles** for `file://` local HTML pages and `chrome://` pages. Root-caused by scout exploration (verified with file:line):
 - F2 (to confirm live):: Chromium's `_favicon/` route returns a blank 200 (not an error) on cache miss — `onerror` never fires, image renders as empty pixels. Likely for per-thread claude.ai URLs with no saved icon.
 - F3:: `buildPinnedTab` attaches no `onerror` at all (`sidepanel/modules/tree-renderer.js:366-381`); pinned tiles rebuild through this path on every state update.
 - Manifest already has the `"favicon"` permission (`manifest.json:16`). Existing coverage: `tests/favicon.test.js` tests only `getFaviconUrl` passthrough/route/default — nothing on preservation or onerror wiring.
 - The real group-loss trigger is forced browser termination: (computer restart) — extension reload was a weak test. The implemented quarantine is designed for exactly this (persisted rescue material, 24h TTL, sweep re-arm), but it has only been verified via unit tests + a soft reload. Needs a real forced-kill verification.
-
-**Files:** shared/shadow-state.js, shared/constants.js, sidepanel/modules/tree-renderer.js, tests/favicon.test.js, tests/shadow-state.test.js, tests/tree-renderer.test.js, tests/helpers/mock-dom.js
-
-**Verification:** `node --test` fully green after Phase B (fresh output).
 
 ### 2026-03-23: Fix: Branch (Parent-Child) Relationships Lost After Chrome Restart
 **Key Decisions:**
@@ -60,7 +68,6 @@
 - Add counter variables at top: `pass1Count`, `pass2Count`, `pass2bCount`, `pass3Count`
 - Line 854: `url: tab.url,` → `url: tab.url || tab.pendingUrl || '',` (update pass stores URL into state)
 - File: `shared/shadow-state.js` — `reconcileWithLiveTabs()`
-- Add counter variables at top: `pass1Count`, `pass2Count`, `pass2bCount`, `pass3Count`
 - Increment in each pass's matching loop
 - Log summary at end: saved count, live count, matches per pass, dead removed, orphans repaired
 - Return stats alongside windowIdMap (or just log — keep return value compatible)
