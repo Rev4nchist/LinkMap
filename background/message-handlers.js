@@ -5,9 +5,10 @@
  * Returns `true` for async sendResponse cases, `undefined` for sync cases.
  */
 
-import { MSG, SAVED_GROUPS_KEY, SETTINGS_KEY, TAB_NOTES_KEY } from '../shared/constants.js';
+import { MSG, SAVED_GROUPS_KEY, SETTINGS_KEY, TAB_NOTES_KEY, UNGROUPED_GROUP_ID } from '../shared/constants.js';
 import { nearestChromeGroupColor } from '../shared/color-distance.js';
 import { syncGroupColorsToTheme } from './smart-mapper.js';
+import { collectGroupableTabIds } from './move-helpers.js';
 
 /**
  * Creates the message handler function.
@@ -35,7 +36,7 @@ export function createMessageHandler({
   initDone,
 }) {
   const {
-    ctx, commitState, broadcastState, getStatePayload,
+    ctx, commitState, commitStateNow, broadcastState, getStatePayload,
     suppressGroupCollapseForBurst, suppressGroupTitleForBurst,
     saveWorkspaces, invalidateDuplicateMap,
   } = context;
@@ -51,8 +52,9 @@ export function createMessageHandler({
   // throwaway pre-init state that init() replaces — the mutation is silently
   // lost, or corrupts the about-to-be-reconciled tree. These are deferred until
   // init completes and then replayed. Pure chrome.* passthroughs (activate /
-  // close / pin / mute / reload / etc.) and async-channel (sendResponse) cases
-  // are intentionally NOT gated — they don't touch pre-init state.
+  // close / pin / mute / reload / etc.) are intentionally NOT gated — they
+  // don't touch pre-init state. Some gated types DO use sendResponse (A8) —
+  // see INIT_GATED_ASYNC below for which ones need the channel kept open.
   const INIT_GATED_TYPES = new Set([
     MSG.MOVE_TAB, MSG.TOGGLE_COLLAPSE, MSG.COLLAPSE_ALL, MSG.EXPAND_ALL,
     MSG.FOCUS_MODE, MSG.SET_THEME, MSG.SET_GROUP_COLOR, MSG.DUPLICATE_TAB,
@@ -63,6 +65,20 @@ export function createMessageHandler({
     MSG.DELETE_WORKSPACE, MSG.RENAME_WORKSPACE, MSG.UPDATE_WORKSPACE,
     MSG.MOVE_TO_WORKSPACE, MSG.SET_TAB_NOTE, MSG.SAVE_SESSION,
     MSG.RESTORE_SESSION, MSG.RESTORE_SESSION_WINDOW, MSG.SAVE_TREE_AS_BOOKMARKS,
+    // A8: MOVE_TO_GROUP is the exact "New Group" message; UNGROUP_TAB and
+    // MULTI_GROUP synchronously read context.state via moveHelpers/tabIds;
+    // GET_SETTINGS/GET_WORKSPACES/GET_AUTO_GROUP_RULES currently answer with
+    // pre-init defaults that a panel could persist back if run too early.
+    MSG.MOVE_TO_GROUP, MSG.UNGROUP_TAB, MSG.MULTI_GROUP,
+    MSG.GET_SETTINGS, MSG.GET_WORKSPACES, MSG.GET_AUTO_GROUP_RULES,
+  ]);
+
+  // A8: of the gated types above, only these call sendResponse (sync or via
+  // an async IIFE) — they need the deferred replay's channel kept open.
+  // Fire-and-forget gated types (UNGROUP_TAB, MULTI_GROUP, etc.) never use
+  // sendResponse and must not keep the channel open.
+  const INIT_GATED_ASYNC = new Set([
+    MSG.MOVE_TO_GROUP, MSG.GET_SETTINGS, MSG.GET_WORKSPACES, MSG.GET_AUTO_GROUP_RULES,
   ]);
 
   return function handleMessage(message, _sender, sendResponse) {
@@ -73,7 +89,9 @@ export function createMessageHandler({
     // replay them once context.state is the real, reconciled instance.
     if (!ctx.initComplete && INIT_GATED_TYPES.has(type)) {
       initDone.then(() => handleMessage(message, _sender, sendResponse));
-      return; // gated cases never use the sendResponse channel
+      // A8: keep the channel open for the subset that actually responds —
+      // everything else is fire-and-forget, matching prior behavior.
+      return INIT_GATED_ASYNC.has(type);
     }
 
     switch (type) {
@@ -116,9 +134,9 @@ export function createMessageHandler({
         } else if (position === 'window') {
           mode = needsWindowMove ? moveTabToWindow(tabId, targetWindowId) : 'async';
         } else if (position === 'child') {
-          mode = moveTabAsChild(tabId, newParentId, needsWindowMove, targetWindowId);
+          mode = moveTabAsChild(tabId, newParentId, needsWindowMove, targetWindowId, targetGroupId);
         } else if (position === 'before' || position === 'after') {
-          mode = moveTabBeforeAfter(tabId, newParentId, targetTabId, position, needsWindowMove, targetWindowId);
+          mode = moveTabBeforeAfter(tabId, newParentId, targetTabId, position, needsWindowMove, targetWindowId, targetGroupId);
         } else {
           // Legacy format: { tabId, newParentId, index }
           state.moveTab(tabId, newParentId, payload.index ?? 0);
@@ -127,10 +145,26 @@ export function createMessageHandler({
 
         if (mode === 'sync') {
           if (targetGroupId !== undefined) {
-            const currentGroupId = sourceTab?.groupId;
-            if (currentGroupId !== targetGroupId) {
-              chrome.tabs.group({ tabIds: [tabId], groupId: targetGroupId }).catch((err) => {
+            // CAE-4/A9: normalize both sides so a drag-out (targetGroupId ===
+            // UNGROUPED_GROUP_ID) is detected the same way as a drag-in —
+            // Chrome, not the payload, stays source of truth for membership.
+            const currentGroupId = sourceTab?.groupId ?? UNGROUPED_GROUP_ID;
+            if (targetGroupId !== currentGroupId) {
+              const ids = collectGroupableTabIds(state, tabId);
+              const syncOp = targetGroupId === UNGROUPED_GROUP_ID
+                ? chrome.tabs.ungroup(ids)
+                : chrome.tabs.group({ tabIds: ids, groupId: targetGroupId });
+              syncOp.catch(async (err) => {
                 console.error('[LinkMap] Group sync failed:', err);
+                // A9: repair shadow state from the live tab rather than
+                // leaving it silently diverged from Chrome.
+                try {
+                  const fresh = await chrome.tabs.get(tabId);
+                  state.updateTab(tabId, { groupId: fresh.groupId });
+                  commitState();
+                } catch (getErr) {
+                  console.error('[LinkMap] Group sync repair failed:', getErr);
+                }
               });
             }
           }
@@ -186,7 +220,8 @@ export function createMessageHandler({
 
       case MSG.SET_GROUP_COLOR: {
         context.state.setGroupColor(payload.groupId, payload.color);
-        commitState();
+        // Phase 5/R5: write-through — group-structural, low-frequency.
+        commitStateNow();
         const chromeColor = nearestChromeGroupColor(payload.color);
         chrome.tabGroups.update(payload.groupId, { color: chromeColor }).catch(() => {});
         break;
@@ -312,7 +347,8 @@ export function createMessageHandler({
         chrome.tabGroups.update(renameGid, { title: newTitle }).catch((err) => {
           console.error('[LinkMap] Group rename failed:', err);
         });
-        commitState();
+        // Phase 5/R5: write-through — group-structural, low-frequency.
+        commitStateNow();
         break;
       }
 
@@ -367,12 +403,22 @@ export function createMessageHandler({
                 return;
               }
             }
+            // 4b/A9: group the tab AND any non-pinned descendants together —
+            // otherwise "New Group" on a parent leaves its children behind.
+            const ids = collectGroupableTabIds(context.state, payload.tabId);
             const resultGroupId = payload.groupId != null
-              ? await chrome.tabs.group({ tabIds: [payload.tabId], groupId: payload.groupId })
-              : await chrome.tabs.group({ tabIds: [payload.tabId] });
+              ? await chrome.tabs.group({ tabIds: ids, groupId: payload.groupId })
+              : await chrome.tabs.group({ tabIds: ids });
 
+            // A10a: set groupId on every moved id synchronously — don't wait
+            // for tabs.onUpdated to eventually catch up.
+            for (const id of ids) {
+              context.state.updateTab(id, { groupId: resultGroupId });
+            }
             repositionTabToGroup(payload.tabId, resultGroupId);
-            commitState();
+            // Phase 5/R5: write-through — group creation is low-frequency
+            // and structural; don't risk losing it to a pre-debounce quit.
+            commitStateNow();
 
             sendResponse({ groupId: resultGroupId });
           } catch (err) {
@@ -640,10 +686,20 @@ export function createMessageHandler({
       case MSG.MULTI_GROUP: {
         (async () => {
           if (!payload.tabIds?.length) return;
+          // B-3: expand each selected tab to its groupable subtree so nested
+          // children are grouped too (parity with every other group call site);
+          // otherwise the panel and Chrome strip diverge and children are
+          // ejected on restart. collectGroupableTabIds also drops pinned ids —
+          // Chrome rejects grouping a pinned tab (A9).
+          const state = context.state;
+          const groupableIds = [...new Set(
+            payload.tabIds.flatMap((id) => collectGroupableTabIds(state, id)),
+          )];
+          if (!groupableIds.length) return;
           try {
             const groupId = payload.groupId != null
-              ? await chrome.tabs.group({ tabIds: payload.tabIds, groupId: payload.groupId })
-              : await chrome.tabs.group({ tabIds: payload.tabIds });
+              ? await chrome.tabs.group({ tabIds: groupableIds, groupId: payload.groupId })
+              : await chrome.tabs.group({ tabIds: groupableIds });
             if (payload.title) {
               await chrome.tabGroups.update(groupId, { title: payload.title });
             }

@@ -8,7 +8,7 @@
 
 import { ShadowState } from './shared/shadow-state.js';
 import { MSG, STORAGE_KEY, SETTINGS_KEY, WORKSPACES_KEY, TAB_NOTES_KEY } from './shared/constants.js';
-import { createContext } from './background/context.js';
+import { createContext, reconcileRetryGroups } from './background/context.js';
 import { createAutoGrouper } from './background/auto-group.js';
 import { createSessionManager } from './background/sessions.js';
 import { createMoveHelpers } from './background/move-helpers.js';
@@ -23,7 +23,7 @@ import { normalizeUrl } from './background/duplicates.js';
 // ---------------------------------------------------------------------------
 
 const context = createContext();
-const { ctx, saveState, commitState, broadcastState, suppressGroupTitleForBurst } = context;
+const { ctx, saveState, saveStateImmediate, commitState, broadcastState, suppressGroupTitleForBurst } = context;
 
 // ---------------------------------------------------------------------------
 // 2. Create domain modules (factory pattern — receive context via DI)
@@ -42,6 +42,7 @@ const sessions = createSessionManager({
   saveState,
   commitState,
   broadcastState,
+  saveStateImmediate,
   DEBUG: ctx.DEBUG,
 });
 
@@ -57,10 +58,13 @@ const tabEvents = createTabEventHandlers({
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // 2c/A7: hoisted so the outer catch can always restore the last-known-good
+  // saved snapshot, regardless of how far the try block got before failing.
+  let savedData;
   try {
     // 1. Load saved state
     const result = await chrome.storage.local.get(STORAGE_KEY);
-    const savedData = result[STORAGE_KEY];
+    savedData = result[STORAGE_KEY];
 
     // 1b. Load settings
     const settingsResult = await chrome.storage.local.get(SETTINGS_KEY);
@@ -108,7 +112,12 @@ async function init() {
             // is rebuilt from the original snapshot, so a wholesale swap would drop
             // those interim edits. Carry over the lineage and collapsed state the
             // live state established (re-parents from openerTabId, panel collapses)
-            // before swapping.
+            // before swapping. A4: the swap must also never regress first-pass
+            // group-level quarantine/rescue/color-override progress the live state
+            // made during this window — reconcileRetryGroups() runs retryState's own
+            // group reconcile (2a: using the pre-reconcile savedGroupTabCounts
+            // snapshot, not a post-reconcile live-groupId recompute) and merges that
+            // live progress in, all before the swap below.
             const liveState = context.state;
             for (const [id, liveNode] of liveState.tabs) {
               const retryNode = retryState.tabs.get(id);
@@ -122,16 +131,11 @@ async function init() {
               if (retryState.tabs.has(cid)) retryState.collapsed.add(cid);
             }
 
-            context.state = retryState;
-
-            // Re-run group reconciliation
+            // Re-run group reconciliation on retryState BEFORE the swap.
             const retryGroups = await chrome.tabGroups.query({});
-            const retryGroupCounts = new Map();
-            for (const [, tab] of retryState.tabs) {
-              const gid = tab.groupId;
-              if (gid && gid !== -1) retryGroupCounts.set(gid, (retryGroupCounts.get(gid) || 0) + 1);
-            }
-            context.state.reconcileWithLiveGroups(retryGroups, retryGroupCounts, retryWindowIdMap);
+            reconcileRetryGroups(retryState, retryGroups, savedGroupTabCounts, retryWindowIdMap, liveState);
+
+            context.state = retryState;
 
             saveState();
             broadcastState();
@@ -157,17 +161,26 @@ async function init() {
       }
     }
 
-    // 4. Identify the active tab and current window
-    const currentWindow = await chrome.windows.getCurrent();
-    ctx.currentWindowId = currentWindow.id;
+    // 4. Identify the active tab and current window — best-effort only. A
+    // failure here (e.g. "no current window" during a cold Chrome startup)
+    // is benign, leaves ctx.currentWindowId/activeTabId null, and must not
+    // abort the rest of init (2c/R6).
+    try {
+      const currentWindow = await chrome.windows.getCurrent();
+      ctx.currentWindowId = currentWindow.id;
 
-    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTabs.length > 0) {
-      ctx.activeTabId = activeTabs[0].id;
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTabs.length > 0) {
+        ctx.activeTabId = activeTabs[0].id;
+      }
+    } catch (innerErr) {
+      console.warn('[LinkMap] Active window/tab lookup failed (non-fatal):', innerErr);
     }
 
-    // 5. Save reconciled state
-    saveState();
+    // 5. Save reconciled state immediately (A6) — the trailing 500ms
+    // debounce must never be the only write between a fresh reconcile and a
+    // possible SW suspend/crash.
+    saveStateImmediate();
 
     // 6. Set up alarms
     sessions.setupAutoSaveAlarm();
@@ -184,15 +197,24 @@ async function init() {
     const notesResult = await chrome.storage.local.get(TAB_NOTES_KEY);
     ctx.tabNotes = notesResult[TAB_NOTES_KEY] || {};
 
-    // 8. Broadcast complete state
-    broadcastState();
-
-    ctx.initComplete = true;
-    tabEvents.drainPendingEvents();
-    context.retryMissingGroupTitles();
     console.log(`[LinkMap] Initialized with ${context.state.tabs.size} tabs, ${context.state.groups.size} groups`);
   } catch (err) {
     console.error('[LinkMap] Init error:', err);
+    // A7: a failure after a partial reconcile can leave context.state
+    // corrupted (half-applied tab/group reconcile). Always restore the
+    // last-known-good saved snapshot when we have one — never save from the
+    // failure path.
+    if (savedData) {
+      context.state = ShadowState.fromStorage(savedData);
+    }
+  } finally {
+    // R6: always flip initComplete and drain/sweep/broadcast, even after an
+    // init error — otherwise gated messages re-dispatch against a
+    // permanently-unresolved initDone and events buffer forever.
+    ctx.initComplete = true;
+    tabEvents.drainPendingEvents();
+    context.retryMissingGroupTitles();
+    broadcastState();
   }
 }
 

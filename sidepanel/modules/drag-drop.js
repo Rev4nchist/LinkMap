@@ -217,16 +217,27 @@ function handleTabDrop(e) {
   const targetWindowId = Number(tabEntry.dataset.windowId);
   if (targetWindowId) payload.targetWindowId = targetWindowId;
 
-  // Include target group so background can sync Chrome group membership
-  const targetGroupId = Number(tabEntry.dataset.groupId);
-  if (targetGroupId !== UNGROUPED_GROUP_ID) {
-    payload.targetGroupId = targetGroupId;
-  }
+  // CAE-4: always send targetGroupId — including UNGROUPED_GROUP_ID when the
+  // drop lands outside any group — so MOVE_TAB can detect a drag-out and
+  // call chrome.tabs.ungroup. Omitting the field silently left Chrome's
+  // grouping diverged from the tree forever.
+  payload.targetGroupId = resolveTargetGroupId(tabEntry.dataset.groupId);
 
   chrome.runtime.sendMessage({
     type: MSG.MOVE_TAB,
     payload,
   }).catch(() => {});
+}
+
+/**
+ * Resolves the numeric targetGroupId from a tab-entry's dataset, falling
+ * back to UNGROUPED_GROUP_ID for a missing/non-numeric value (CAE-4).
+ * @param {string|undefined} rawGroupId
+ * @returns {number}
+ */
+function resolveTargetGroupId(rawGroupId) {
+  const n = Number(rawGroupId);
+  return Number.isFinite(n) ? n : UNGROUPED_GROUP_ID;
 }
 
 /**
@@ -583,4 +594,4 @@ function pinnedCleanup() {
 // Test exports (pure logic functions, no DOM side effects)
 // ---------------------------------------------------------------------------
 
-export const _testing = { resolveDropMode, resolveDropModeFlat, getParentFromDOM, buildMovePayload };
+export const _testing = { resolveDropMode, resolveDropModeFlat, getParentFromDOM, buildMovePayload, resolveTargetGroupId };

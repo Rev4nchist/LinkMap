@@ -6,7 +6,7 @@
  */
 
 import {
-  MSG, STORAGE_KEY, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES, MAX_AUTO_SAVES,
+  MSG, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES, MAX_AUTO_SAVES,
 } from '../shared/constants.js';
 
 const AUTO_SAVE_ALARM = 'linkmap-auto-save';
@@ -20,10 +20,11 @@ const AUTO_ARCHIVE_ALARM = 'linkmap-auto-archive';
  * @param {Function} params.saveState - debounced save
  * @param {Function} params.commitState - save + broadcast
  * @param {Function} params.broadcastState - broadcast only
+ * @param {Function} params.saveStateImmediate - immediate, debounce-cancelling save; returns a Promise
  * @param {boolean} params.DEBUG - verbose logging
  * @returns {Object} Session management API
  */
-export function createSessionManager({ getState, ctx, saveState, commitState, broadcastState, DEBUG }) {
+export function createSessionManager({ getState, ctx, saveState, commitState, broadcastState, saveStateImmediate, DEBUG }) {
 
   // -----------------------------------------------------------------------
   // Alarm setup
@@ -475,10 +476,18 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
   // -----------------------------------------------------------------------
 
   function onSuspend() {
-    chrome.storage.local.set({ [STORAGE_KEY]: getState().toSerializable() });
+    // A10c: route the write through the same immediate serializer (cancels
+    // any pending debounce — single-writer discipline) and don't log success
+    // before the write promise actually settles.
+    Promise.resolve(saveStateImmediate())
+      .then(() => {
+        console.log('[LinkMap] State flushed on suspend');
+      })
+      .catch((err) => {
+        console.error('[LinkMap] State flush on suspend failed:', err);
+      });
     // Best-effort — async save may not complete before MV3 worker terminates
     saveSession('Auto-Save (Suspend)', true).catch(() => {});
-    console.log('[LinkMap] State flushed on suspend');
   }
 
   return {

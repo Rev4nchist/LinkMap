@@ -8,7 +8,10 @@
  * Parent-child relationships are maintained via parentId / children[].
  */
 
-import { STORAGE_VERSION, DEFAULT_THEME, UNGROUPED_GROUP_ID } from './constants.js';
+import {
+  STORAGE_VERSION, DEFAULT_THEME, UNGROUPED_GROUP_ID,
+  ORPHANED_GROUP_TTL_MS, ORPHANED_GROUP_CAP,
+} from './constants.js';
 
 // Properties that may be updated via updateTab().
 const MUTABLE_PROPS = [
@@ -104,6 +107,15 @@ export class ShadowState {
 
     /** @type {Object<number, string>} groupId -> hex color (manual overrides) */
     this.groupColors = {};
+
+    /**
+     * @type {Map<number, Object>} quarantine for orphaned titled groups —
+     * id -> { id, title, color, collapsed, rawWindowId, count, colorOverride,
+     * orphanedAt }. Survives progressive session restore instead of being
+     * hard-deleted; entries are match-gated back onto a live group (see
+     * reconcileWithLiveGroups) and pruned after ORPHANED_GROUP_TTL_MS.
+     */
+    this.orphanedGroups = new Map();
 
     /** @type {string} Active theme name */
     this.theme = DEFAULT_THEME;
@@ -410,6 +422,7 @@ export class ShadowState {
     if ('title' in changes) group.title = changes.title;
     if ('color' in changes) group.color = changes.color;
     if ('collapsed' in changes) group.collapsed = changes.collapsed;
+    if ('windowId' in changes) group.windowId = changes.windowId;
   }
 
   /**
@@ -570,18 +583,24 @@ export class ShadowState {
    * Preserves first-occurrence order of groups and relative order within groups.
    */
   enforceGroupContiguity() {
-    // Build map: groupId -> [tabIds in rootIds order]
+    // Build map: groupId -> [tabIds in rootIds order], real groups only.
+    // Ungrouped tabs must keep their individual positions — bucketing them
+    // as a pseudo-group coalesced every ungrouped tab at the first one's
+    // position, sinking all groups below the ungrouped block on every
+    // reconcile (each SW wake).
     const groupBuckets = new Map();
 
     for (const id of this.rootIds) {
       const tab = this.tabs.get(id);
       if (!tab) continue;
       const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
+      if (gid === UNGROUPED_GROUP_ID) continue;
       if (!groupBuckets.has(gid)) groupBuckets.set(gid, []);
       groupBuckets.get(gid).push(id);
     }
 
-    // Rebuild rootIds preserving first-occurrence order of groups
+    // Rebuild rootIds: ungrouped tabs stay in place; each group's members
+    // block together at the group's first-occurrence position.
     const seenGroups = new Set();
     const newRootIds = [];
 
@@ -590,8 +609,11 @@ export class ShadowState {
       if (!tab) continue;
       const gid = tab.groupId ?? UNGROUPED_GROUP_ID;
 
+      if (gid === UNGROUPED_GROUP_ID) {
+        newRootIds.push(id);
+        continue;
+      }
       if (!seenGroups.has(gid)) {
-        // First time seeing this group — add all its members
         seenGroups.add(gid);
         newRootIds.push(...groupBuckets.get(gid));
       }
@@ -666,6 +688,7 @@ export class ShadowState {
       collapsed: [...this.collapsed],
       groups: Object.fromEntries(this.groups),
       groupColors: { ...this.groupColors },
+      orphanedGroups: Object.fromEntries(this.orphanedGroups),
       theme: this.theme,
       windowNames: Object.fromEntries(this.windowNames),
     };
@@ -703,6 +726,12 @@ export class ShadowState {
     if (data.groupColors) {
       for (const [key, val] of Object.entries(data.groupColors)) {
         state.groupColors[Number(key)] = val;
+      }
+    }
+
+    if (data.orphanedGroups) {
+      for (const [key, entry] of Object.entries(data.orphanedGroups)) {
+        state.orphanedGroups.set(Number(key), entry);
       }
     }
     state.theme = data.theme ?? DEFAULT_THEME;
@@ -1025,10 +1054,15 @@ export class ShadowState {
 
     // (b) Update existing / add new.
     for (const tab of liveTabs) {
+      const effectiveUrl = tab.url || tab.pendingUrl || '';
+      const existingNode = this.tabs.get(tab.id);
+      const favIconUrl = tab.favIconUrl
+        || (existingNode?.url === effectiveUrl ? existingNode.favIconUrl : '')
+        || '';
       const changes = {
         title:      tab.title,
-        url:        tab.url || tab.pendingUrl || '',
-        favIconUrl: tab.favIconUrl ?? '',
+        url:        effectiveUrl,
+        favIconUrl,
         pinned:     tab.pinned,
         audible:    tab.audible,
         status:     tab.status,
@@ -1093,7 +1127,7 @@ export class ShadowState {
    * @param {Map<number, number>} windowIdMap - Old windowId → new windowId mapping,
    *   built by reconcileWithLiveTabs() from tab matching across restart.
    */
-  reconcileWithLiveGroups(liveGroups, savedGroupTabCounts = new Map(), windowIdMap = new Map()) {
+  reconcileWithLiveGroups(liveGroups, savedGroupTabCounts = new Map(), windowIdMap = new Map(), now = Date.now()) {
     const liveIds = new Set(liveGroups.map((g) => g.id));
 
     // Compute tab counts per NEW group from reconciled tab state
@@ -1105,42 +1139,84 @@ export class ShadowState {
       }
     }
 
-    // Build rescue maps from orphaned groups (saved IDs not in live set).
-    // After a restart Chrome assigns new group AND window IDs. We translate
-    // the saved windowId → new windowId using the map built from tab matching.
-    // Three tiers: color:mappedWid:count (precise) → color:mappedWid → color-only (last resort).
-    const rescueByCount = new Map();      // "color:wid:count" → title
-    const rescueByColor = new Map();      // "color:wid" → title (first match only)
-    const rescueByColorOnly = new Map();  // "color" → title (last resort)
-    const colorOnlyOrphanCount = new Map(); // color → # orphaned titled groups
+    // 1. Prune quarantine entries older than ORPHANED_GROUP_TTL_MS.
+    for (const [id, entry] of this.orphanedGroups) {
+      if (now - entry.orphanedAt > ORPHANED_GROUP_TTL_MS) {
+        this.orphanedGroups.delete(id);
+      }
+    }
+
+    // 2. Gated resurrection: Chrome group ids are small session-scoped ints
+    // and get reused across restarts routinely, so a live group reusing a
+    // quarantined id is NOT necessarily the same group. Only resurrect in
+    // place when the live group looks like a match (empty title, same
+    // color, and the quarantined windowId — re-mapped fresh, see A2 — is
+    // either unmapped or agrees with the live group's window). On a
+    // mismatch, keep the entry available for normal tier matching by
+    // re-keying it under a synthetic negative id so it stops colliding with
+    // the live group's id.
+    let negativeKeySeq = -1;
+    for (const group of liveGroups) {
+      const entry = this.orphanedGroups.get(group.id);
+      if (!entry) continue;
+
+      const widIsMapped = windowIdMap.has(entry.rawWindowId);
+      const mappedWid = widIsMapped ? windowIdMap.get(entry.rawWindowId) : entry.rawWindowId;
+      const widOk = !widIsMapped || mappedWid === group.windowId;
+
+      if (!group.title && group.color === entry.color && widOk) {
+        this.groups.set(group.id, {
+          id: group.id,
+          title: entry.title,
+          color: group.color,
+          collapsed: group.collapsed ?? entry.collapsed,
+          windowId: group.windowId,
+        });
+        if (entry.colorOverride) this.groupColors[group.id] = entry.colorOverride;
+        this.orphanedGroups.delete(group.id);
+      } else {
+        this.orphanedGroups.delete(group.id);
+        this.orphanedGroups.set(negativeKeySeq, { ...entry, id: negativeKeySeq });
+        negativeKeySeq--;
+      }
+    }
+
+    // 3. Quarantine newly orphaned titled groups instead of hard-deleting
+    // them — untitled orphans still have nothing worth rescuing, so they're
+    // discarded as before.
     for (const [id, saved] of this.groups) {
-      if (!liveIds.has(id) && saved.title) {
-        const count = savedGroupTabCounts.get(id) || 0;
-        const mappedWid = windowIdMap.get(saved.windowId) ?? saved.windowId;
-        const countKey = `${saved.color}:${mappedWid}:${count}`;
-        if (!rescueByCount.has(countKey)) {
-          rescueByCount.set(countKey, saved.title);
-        }
-        const colorKey = `${saved.color}:${mappedWid}`;
-        if (!rescueByColor.has(colorKey)) {
-          rescueByColor.set(colorKey, saved.title);
-        }
-        if (!rescueByColorOnly.has(saved.color)) {
-          rescueByColorOnly.set(saved.color, saved.title);
-        }
-        colorOnlyOrphanCount.set(saved.color, (colorOnlyOrphanCount.get(saved.color) || 0) + 1);
+      if (liveIds.has(id)) continue;
+      if (saved.title) {
+        this.orphanedGroups.set(id, {
+          id,
+          title: saved.title,
+          color: saved.color,
+          collapsed: saved.collapsed,
+          rawWindowId: saved.windowId,
+          count: savedGroupTabCounts.get(id) || 0,
+          colorOverride: this.groupColors[id],
+          orphanedAt: now,
+        });
+      }
+      this.groups.delete(id);
+      delete this.groupColors[id];
+    }
+
+    // Enforce the quarantine cap — evict the oldest entries, never silently.
+    if (this.orphanedGroups.size > ORPHANED_GROUP_CAP) {
+      const overflow = this.orphanedGroups.size - ORPHANED_GROUP_CAP;
+      const oldestFirst = [...this.orphanedGroups.entries()]
+        .sort((a, b) => a[1].orphanedAt - b[1].orphanedAt);
+      for (let i = 0; i < overflow; i++) {
+        const [key] = oldestFirst[i];
+        this.orphanedGroups.delete(key);
+        console.warn('[LinkMap] orphanedGroups cap eviction:', key);
       }
     }
 
-    // Remove dead groups (and their stranded color overrides)
-    for (const id of this.groups.keys()) {
-      if (!liveIds.has(id)) {
-        this.groups.delete(id);
-        delete this.groupColors[id];
-      }
-    }
-
-    // Add/update live groups — preserve saved title if Chrome has none
+    // 4/5. Add/update live groups — preserve saved title if Chrome has none,
+    // rescuing from quarantine (built fresh each call — see
+    // _matchOrphanedGroup) when Chrome returns an untitled group.
     for (const group of liveGroups) {
       const existing = this.groups.get(group.id);
       if (existing) {
@@ -1150,32 +1226,111 @@ export class ShadowState {
         if (group.title) existing.title = group.title;
       } else {
         this.addGroup(group);
-        // Rescue title from orphaned group if Chrome returned empty
         if (!group.title) {
           const count = newGroupTabCounts.get(group.id) || 0;
-          const countKey = `${group.color}:${group.windowId}:${count}`;
-          let rescued = rescueByCount.get(countKey);
-          if (rescued) {
-            rescueByCount.delete(countKey);
-          } else {
-            const colorKey = `${group.color}:${group.windowId}`;
-            rescued = rescueByColor.get(colorKey);
-            if (rescued) rescueByColor.delete(colorKey);
-          }
-          if (!rescued && colorOnlyOrphanCount.get(group.color) === 1) {
-            // RR-5: only trust the color-only tier when exactly one orphaned
-            // group of that color existed. Chrome has ~8 colors, so with two
-            // same-color orphans the title is ambiguous and could be pasted
-            // (and pushed back to Chrome) onto an unrelated group.
-            rescued = rescueByColorOnly.get(group.color);
-            if (rescued) rescueByColorOnly.delete(group.color);
-          }
-          if (rescued) {
-            this.groups.get(group.id).title = rescued;
+          const matched = this._matchOrphanedGroup(group.color, group.windowId, count, now, windowIdMap);
+          if (matched) {
+            this.groups.get(group.id).title = matched.title;
+            if (matched.colorOverride) this.groupColors[group.id] = matched.colorOverride;
           }
         }
       }
     }
+
+    // A-4: normalize surviving quarantine entries to the current (post-restart)
+    // window ids. The later map-less sweep (rescueUntitledLiveGroup ->
+    // _matchOrphanedGroup with no windowIdMap) compares a live group's NEW
+    // windowId against the entry's stale pre-restart rawWindowId, never matches
+    // on window, and falls to the ambiguous color-only tier — so with >=2
+    // same-color orphans it rescued NEITHER title and they expired at the TTL.
+    // Rewriting rawWindowId through the map here lets the sweep match on the
+    // real window. Empty map (a non-restart SW wake) is a no-op.
+    if (windowIdMap.size > 0) {
+      for (const entry of this.orphanedGroups.values()) {
+        if (windowIdMap.has(entry.rawWindowId)) {
+          entry.rawWindowId = windowIdMap.get(entry.rawWindowId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Attempts to match a live, untitled tab group against a quarantined
+   * orphaned group. Tries three progressively looser tiers: exact
+   * color:windowId:count, then color:windowId, then color-only — the
+   * color-only tier only fires when exactly one non-expired quarantined
+   * group of that color exists (RR-5: with two same-color orphans the
+   * title is ambiguous and could be pasted onto an unrelated group).
+   *
+   * windowId is re-mapped through windowIdMap fresh on every call (A2) — a
+   * frozen mapping captured once would go stale across service-worker
+   * restarts. Expired entries (older than ORPHANED_GROUP_TTL_MS) are never
+   * matched, independent of whether reconcileWithLiveGroups has pruned them.
+   *
+   * On a match, deletes the matched entry from quarantine and returns it.
+   *
+   * @param {string} color
+   * @param {number} windowId
+   * @param {number} count
+   * @param {number} now
+   * @param {Map<number, number>} windowIdMap
+   * @returns {Object|null} the matched quarantine entry, or null
+   */
+  _matchOrphanedGroup(color, windowId, count, now, windowIdMap = new Map()) {
+    let countMatch = null;
+    let colorMatch = null;
+    let colorOnlyMatch = null;
+    let colorOnlyCount = 0;
+
+    for (const entry of this.orphanedGroups.values()) {
+      if (now - entry.orphanedAt > ORPHANED_GROUP_TTL_MS) continue; // expired
+      if (entry.color !== color) continue;
+
+      colorOnlyCount++;
+      if (!colorOnlyMatch) colorOnlyMatch = entry;
+
+      const mappedWid = windowIdMap.has(entry.rawWindowId)
+        ? windowIdMap.get(entry.rawWindowId)
+        : entry.rawWindowId;
+      if (mappedWid === windowId) {
+        if (!colorMatch) colorMatch = entry;
+        if (!countMatch && entry.count === count) countMatch = entry;
+      }
+    }
+
+    const matched = countMatch || colorMatch || (colorOnlyCount === 1 ? colorOnlyMatch : null);
+    if (matched) this.orphanedGroups.delete(matched.id);
+    return matched || null;
+  }
+
+  /**
+   * Rescues a title for an already-live, already-tracked group that is
+   * still untitled — used by the retry sweep well after the initial
+   * reconcile, once tab membership has settled. Only attempts a match once
+   * the group has at least one member tab in state (A5b) — an empty group
+   * at creation instant would otherwise produce false count=0 matches and
+   * wrong color-only pushes.
+   *
+   * @param {Object} liveGroup - Chrome TabGroup object (or {id, color, windowId}).
+   * @param {number} now
+   * @returns {string|null} the rescued title, or null if no match applied.
+   */
+  rescueUntitledLiveGroup(liveGroup, now = Date.now()) {
+    const existing = this.groups.get(liveGroup.id);
+    if (!existing || existing.title) return null;
+
+    let count = 0;
+    for (const [, tab] of this.tabs) {
+      if (tab.groupId === liveGroup.id) count++;
+    }
+    if (count === 0) return null;
+
+    const matched = this._matchOrphanedGroup(liveGroup.color, liveGroup.windowId, count, now);
+    if (!matched) return null;
+
+    existing.title = matched.title;
+    if (matched.colorOverride) this.groupColors[liveGroup.id] = matched.colorOverride;
+    return matched.title;
   }
 }
 

@@ -22,7 +22,7 @@ const RELEVANT_CHANGE_FIELDS = new Set([
  * @returns {Object} Event handler functions
  */
 export function createTabEventHandlers({ context, applyAutoGroupRules, repositionTabToGroup, getPinnedBoundaryIndex }) {
-  const { ctx, commitState, broadcastState, invalidateDuplicateMap, suppressGroupCollapseForBurst, suppressGroupTitleForBurst } = context;
+  const { ctx, commitState, commitStateNow, broadcastState, invalidateDuplicateMap, suppressGroupCollapseForBurst, suppressGroupTitleForBurst } = context;
 
   /** @type {Array<{type: string, [key: string]: *}>} Events buffered before init completes. */
   const pendingEvents = [];
@@ -221,7 +221,17 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       return;
     }
     context.state.addGroup(group);
-    commitState();
+    // Phase 5/R5: write-through — group creation is low-frequency and
+    // losing it to a pre-debounce crash/quit is the reported bug class.
+    commitStateNow();
+
+    // 2e: a window restored from History minutes later (well past the 14s
+    // sweep window) can create an untitled group that still has a quarantine
+    // match — re-arm the sweep instead of waiting for the next SW start. The
+    // single-flight guard (A5a) makes this safe to call unconditionally.
+    if (!group.title && context.state.orphanedGroups.size > 0) {
+      context.retryMissingGroupTitles();
+    }
 
     ctx.DEBUG && console.log(`[LinkMap] Group created: ${group.id} "${group.title || 'untitled'}"`);
   }
@@ -232,11 +242,16 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       return;
     }
     const state = context.state;
+    const existing = state.groups.get(group.id);
+    // Snapshot prior structural fields BEFORE updateGroup (which may mutate
+    // the group node in place) so the write-through decision below is sound.
+    const prevTitle = existing?.title;
+    const prevColor = existing?.color;
     const updates = {
       color: group.color,
+      windowId: group.windowId,
     };
     if (ctx.suppressGroupTitleCount === 0) {
-      const existing = state.groups.get(group.id);
       if (group.title || !existing?.title) {
         updates.title = group.title;
       }
@@ -245,7 +260,18 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       updates.collapsed = group.collapsed;
     }
     state.updateGroup(group.id, updates);
-    commitState();
+    // A-1: a native tab-strip rename or recolor is a structural change that
+    // must survive a forced quit inside the window. Write through immediately
+    // (like onGroupRemoved) instead of the 500ms debounce; otherwise the name
+    // is lost on kill and an empty-title group never enters quarantine —
+    // unrecoverable. Collapse-only / transient updates keep the debounced path.
+    const titleChanged = updates.title !== undefined && updates.title !== prevTitle;
+    const colorChanged = group.color !== prevColor;
+    if (titleChanged || colorChanged) {
+      commitStateNow();
+    } else {
+      commitState();
+    }
 
     ctx.DEBUG && console.log(`[LinkMap] Group updated: ${group.id} "${group.title || 'untitled'}" collapsed=${group.collapsed}${ctx.suppressGroupCollapseCount > 0 ? ' (suppressed)' : ''}`);
   }
@@ -256,8 +282,18 @@ export function createTabEventHandlers({ context, applyAutoGroupRules, repositio
       pendingEvents.push({ type: 'groupRemoved', group });
       return;
     }
-    context.state.removeGroup(group.id);
-    commitState();
+    const state = context.state;
+    // A10b: reset every tab that pointed at the removed group BEFORE the
+    // immediate save — never serialize a tab referencing a dead group.
+    for (const [tabId, tab] of state.tabs) {
+      if (tab.groupId === group.id) {
+        state.updateTab(tabId, { groupId: UNGROUPED_GROUP_ID });
+      }
+    }
+    state.removeGroup(group.id);
+    // Phase 5/R5: write-through — group removal is low-frequency and
+    // structural; don't risk losing it to a pre-debounce crash/quit.
+    commitStateNow();
 
     ctx.DEBUG && console.log(`[LinkMap] Group removed: ${group.id}`);
   }

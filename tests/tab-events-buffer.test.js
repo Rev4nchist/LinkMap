@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTabEventHandlers } from '../background/tab-events.js';
 
@@ -54,6 +54,7 @@ function createMockContext(state) {
     ctx,
     state,
     commitState() {},
+    commitStateNow() {},
     broadcastState() {},
     invalidateDuplicateMap() {},
     suppressGroupCollapseForBurst() {},
@@ -335,5 +336,53 @@ describe('tab-events: buffers all lifecycle events during init (SW-2)', () => {
     handlers.drainPendingEvents();
     assert.equal(state.groups.get(12).title, 'New', 'existing group updated on replay');
     assert.equal(state.groups.has(13), false, 'no phantom group upserted on replay');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: onGroupUpdated write-through on structural change (A-1)
+// A native tab-strip rename/recolor must persist immediately (commitStateNow),
+// not via the 500ms debounce — a forced quit inside the window otherwise loses
+// the name, and an empty-title group never enters quarantine (unrecoverable).
+// Collapse-only / transient updates keep the debounced path.
+// ---------------------------------------------------------------------------
+
+describe('onGroupUpdated write-through on structural change (A-1)', () => {
+  /** Builds handlers with mock commit fns and one existing group (post-init). */
+  function setup() {
+    const state = createMockState();
+    state.addGroup({ id: 5, title: 'Orig', color: 'blue', collapsed: false, windowId: 1 });
+    const context = createMockContext(state);
+    context.ctx.initComplete = true;           // run the handler body, not buffering
+    context.commitState = mock.fn();
+    context.commitStateNow = mock.fn();
+    const handlers = createTabEventHandlers({
+      context,
+      applyAutoGroupRules: () => {},
+      repositionTabToGroup: () => {},
+      getPinnedBoundaryIndex: () => 0,
+    });
+    return { state, context, handlers };
+  }
+
+  it('writes through (commitStateNow) when the title changes', () => {
+    const { context, handlers } = setup();
+    handlers.onGroupUpdated({ id: 5, title: 'Renamed', color: 'blue', collapsed: false, windowId: 1 });
+    assert.equal(context.commitStateNow.mock.callCount(), 1, 'native rename persisted immediately');
+    assert.equal(context.commitState.mock.callCount(), 0, 'debounced path not used for a structural change');
+  });
+
+  it('writes through (commitStateNow) when the color changes', () => {
+    const { context, handlers } = setup();
+    handlers.onGroupUpdated({ id: 5, title: 'Orig', color: 'red', collapsed: false, windowId: 1 });
+    assert.equal(context.commitStateNow.mock.callCount(), 1, 'recolor persisted immediately');
+    assert.equal(context.commitState.mock.callCount(), 0);
+  });
+
+  it('uses the debounced path (commitState) for a collapse-only change', () => {
+    const { context, handlers } = setup();
+    handlers.onGroupUpdated({ id: 5, title: 'Orig', color: 'blue', collapsed: true, windowId: 1 });
+    assert.equal(context.commitState.mock.callCount(), 1, 'transient collapse stays debounced');
+    assert.equal(context.commitStateNow.mock.callCount(), 0, 'no write-through for a non-structural change');
   });
 });

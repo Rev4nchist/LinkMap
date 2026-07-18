@@ -6,10 +6,14 @@
  */
 export function debounce(fn, ms) {
   let timer;
-  return function (...args) {
+  const debounced = function (...args) {
     clearTimeout(timer);
     timer = setTimeout(() => fn.apply(this, args), ms);
   };
+  // A6: lets an immediate write cancel a still-pending debounced one, so a
+  // stale trailing debounce can never clobber a newer write.
+  debounced.cancel = () => clearTimeout(timer);
+  return debounced;
 }
 
 /**
