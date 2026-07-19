@@ -7,6 +7,7 @@
 
 import {
   MSG, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES, MAX_AUTO_SAVES,
+  CRASH_RECOVERY_KEY,
 } from '../shared/constants.js';
 
 const AUTO_SAVE_ALARM = 'linkmap-auto-save';
@@ -408,10 +409,21 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
 
   function checkForCrashRecovery(savedTabCount, liveTabCount) {
     if (savedTabCount > 5 && liveTabCount < savedTabCount * 0.5) {
+      const payload = { savedTabCount, liveTabCount, ts: Date.now() };
+
+      // Persist the flag so the side panel can pick it up on its OWN init,
+      // even when it wasn't open yet when this ran during the SW's init()
+      // (the normal crash/restart scenario). The one-shot sendMessage below
+      // is silently dropped in that case — this is the fix for F7.
+      try {
+        chrome.storage.local.set({ [CRASH_RECOVERY_KEY]: payload }).catch(() => {});
+      } catch (_e) {}
+
+      // Belt-and-suspenders: still push live for the already-open-panel case.
       try {
         chrome.runtime.sendMessage({
           type: MSG.CRASH_RECOVERY,
-          payload: { savedTabCount, liveTabCount },
+          payload,
         }).catch(() => {});
       } catch (_e) {}
 

@@ -1133,6 +1133,40 @@ describe('reconcileWithLiveTabs — return value includes stats', () => {
     assert.equal(stats.liveCount, 1);
     assert.equal(stats.deadRemoved, 1);
   });
+
+  it('returns a tabIdMap of old->new tabIds for every remapped tab (F8)', () => {
+    const s = new ShadowState();
+    // Pass 1: same-session id, never remapped, should NOT appear in tabIdMap.
+    s.addTab(1, makeTab({ tabId: 1, url: 'https://same.com' }));
+    // Pass 2: URL-matched, remapped 100 -> 501.
+    s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
+    // Pass 2b: title-matched (URL changed), remapped 200 -> 502.
+    s.addTab(200, makeTab({ tabId: 200, url: 'https://stale.example', title: 'Docs' }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, url: 'https://same.com', index: 0 }),
+      makeLiveTab({ id: 501, url: 'https://github.com', title: 'GitHub', index: 1 }),
+      makeLiveTab({ id: 502, url: 'https://docs.example', title: 'Docs', index: 2 }),
+    ];
+
+    const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs);
+    assert.ok(tabIdMap instanceof Map, 'should have tabIdMap');
+    assert.equal(tabIdMap.get(100), 501, 'pass2 remap recorded');
+    assert.equal(tabIdMap.get(200), 502, 'pass2b remap recorded');
+    assert.ok(!tabIdMap.has(1), 'unremapped same-session tab not recorded');
+  });
+
+  it('tabIdMap records Pass 3 positional remaps', () => {
+    const s = new ShadowState();
+    s.addTab(300, makeTab({ tabId: 300, url: '', title: 'New Tab', windowId: 1, index: 0 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 900, url: '', title: 'New Tab', windowId: 1, index: 0 }),
+    ];
+
+    const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs);
+    assert.equal(tabIdMap.get(300), 900, 'pass3 positional remap recorded');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1271,6 +1305,70 @@ describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () =>
 
     assert.equal(s.getTab(510)?.parentId, 501, 'child stays under the window-500 Inbox');
     assert.notEqual(s.getTab(510)?.parentId, 601, 'child is NOT cross-attached to the window-600 Inbox');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-2/F9: coldRestart — Pass 1 corroboration + windowId vote gating
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — coldRestart: Pass 1 requires corroboration', () => {
+  it('does not graft a coincidental id collision into the tree or poison the windowId map', () => {
+    const s = new ShadowState();
+    // Saved node: id 42, window 100, distinct url/title.
+    s.addTab(42, makeTab({
+      tabId: 42, windowId: 100, url: 'https://mail.example/inbox',
+      title: 'Inbox', index: 0,
+    }));
+    // A genuinely-matched anchor tab so the windowId vote machinery has a
+    // real match to compare against (and to prove real votes still work).
+    s.addTab(7, makeTab({
+      tabId: 7, windowId: 100, url: 'https://mail.example/anchor',
+      title: 'Anchor', index: 1,
+    }));
+
+    // Cold restart: Chrome reassigned ids. A totally unrelated live tab
+    // now happens to hold id 42 in a DIFFERENT window, with unrelated
+    // content (no url/title corroboration). The genuine anchor tab is
+    // matched at a new id (107) in the same new window (500) via Pass 2
+    // URL fingerprinting.
+    const liveTabs = [
+      makeLiveTab({ id: 42, windowId: 999, url: 'https://unrelated.example/x', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 107, windowId: 500, url: 'https://mail.example/anchor', title: 'Anchor', index: 1 }),
+    ];
+
+    const { windowIdMap, stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 0, 'coincidental id collision is not accepted by Pass 1 without corroboration');
+    assert.notEqual(windowIdMap.get(100), 999, 'coincidental collision does not poison the windowId map');
+    assert.equal(windowIdMap.get(100), 500, 'genuine match still produces the correct windowId vote');
+  });
+});
+
+describe('reconcileWithLiveTabs — coldRestart: default (warm wake) is unchanged', () => {
+  it('matches by id unconditionally when coldRestart is not passed (regression lock)', () => {
+    const s = new ShadowState();
+    s.addTab(42, makeTab({
+      tabId: 42, windowId: 100, url: 'https://mail.example/inbox',
+      title: 'Inbox', index: 0,
+    }));
+    s.addTab(7, makeTab({
+      tabId: 7, windowId: 100, url: 'https://mail.example/anchor',
+      title: 'Anchor', index: 1,
+    }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 42, windowId: 999, url: 'https://unrelated.example/x', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 107, windowId: 500, url: 'https://mail.example/anchor', title: 'Anchor', index: 1 }),
+    ];
+
+    // No second argument — must match today's unconditional same-id Pass 1
+    // match, including the (unrelated-but-still-current) vote outcome from
+    // the id-42 collision. This is the byte-identical-on-warm-wake lock.
+    const { windowIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(stats.pass1, 1, 'default flag preserves unconditional same-id Pass 1 match');
+    assert.equal(windowIdMap.get(100), 999, 'default flag preserves the unguarded vote outcome (regression lock)');
   });
 });
 
@@ -1432,6 +1530,37 @@ describe('reconcileWithLiveGroups — orphaned titled groups are quarantined, no
     assert.equal(s.orphanedGroups.size, 0, 'quarantine emptied after rescue');
   });
 
+  it('A-2: rescues a quarantined colorOverride onto a new-id live group when Chrome preserved the title', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(1, '#123456');
+    s.reconcileWithLiveGroups([], new Map([[1, 2]]), new Map(), 1000);
+    assert.ok(s.orphanedGroups.has(1));
+
+    // Chrome kept the TITLE alive under a brand-new id — this hits the
+    // titled branch (existing untouched, group.title truthy), not the
+    // untitled rescue tier.
+    const liveGroups = [{ id: 99, title: 'Research', color: 'blue', collapsed: false, windowId: 10 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), 2000);
+
+    assert.equal(s.groups.get(99).title, 'Research', 'title came from Chrome, unaffected');
+    assert.equal(s.groupColors[99], '#123456', 'custom colorOverride rescued onto the new id');
+    assert.equal(s.orphanedGroups.size, 0, 'quarantine entry consumed, not left to expire at TTL');
+  });
+
+  it('A-2: does not rescue a colorOverride when title matches but color does not (A-3 collision guard)', () => {
+    const s = new ShadowState();
+    s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
+    s.setGroupColor(1, '#123456');
+    s.reconcileWithLiveGroups([], new Map([[1, 2]]), new Map(), 1000);
+
+    const liveGroups = [{ id: 99, title: 'Research', color: 'red', collapsed: false, windowId: 10 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), 2000);
+
+    assert.ok(!(99 in s.groupColors), 'no colorOverride applied on color mismatch');
+    assert.ok(s.orphanedGroups.size >= 1, 'quarantine entry survives (not consumed on non-match)');
+  });
+
   it('prunes quarantine entries older than the TTL', () => {
     const s = new ShadowState();
     s.groups.set(1, { id: 1, title: 'Research', color: 'blue', collapsed: false, windowId: 10 });
@@ -1540,6 +1669,51 @@ describe('reconcileWithLiveGroups — gated resurrection (RR-9)', () => {
     const survivors = [...s.orphanedGroups.values()].filter((e) => e.title === 'Research');
     assert.equal(survivors.length, 1, 'quarantine entry survives, re-keyed, for normal tier matching');
     assert.ok(!s.orphanedGroups.has(7), 'old id key freed for the live group');
+  });
+});
+
+describe('reconcileWithLiveGroups — negative-key collision guard (A-7)', () => {
+  it('does not overwrite a pre-existing negative-keyed quarantine entry on a later gated-resurrection requeue', () => {
+    const s = new ShadowState();
+    // Simulates a quarantine entry already re-keyed to -1 by a PRIOR call
+    // (or carried over via persisted/deserialized state) before this call.
+    s.orphanedGroups.set(-1, { id: -1, title: 'PriorRequeue', color: 'grey', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 1000 });
+    // A group still quarantined at its original (positive) id.
+    s.orphanedGroups.set(5, { id: 5, title: 'ThisRequeue', color: 'red', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 1000 });
+
+    // Chrome reuses id 5 for an unrelated live group -> gated resurrection
+    // mismatches (title present, color differs) -> requeue.
+    const liveGroups = [{ id: 5, title: 'Unrelated Live Group', color: 'green', collapsed: false, windowId: 1 }];
+    s.reconcileWithLiveGroups(liveGroups, new Map(), new Map(), Date.now());
+
+    const titles = [...s.orphanedGroups.values()].map((e) => e.title);
+    assert.ok(titles.includes('PriorRequeue'), 'pre-existing negative-keyed entry survives, not overwritten');
+    assert.ok(titles.includes('ThisRequeue'), 'newly re-keyed entry is also present at a distinct key');
+  });
+
+  it('cross-instance union (reconcileRetryGroups) preserves retryState\'s own accumulated quarantine entries alongside liveState\'s', async () => {
+    const { reconcileRetryGroups } = await import('../background/context.js');
+
+    const retryState = new ShadowState();
+    // retryState already has two previously re-keyed entries plus one group
+    // still quarantined at its original id, about to fail resurrection.
+    retryState.orphanedGroups.set(-1, { id: -1, title: 'RetryEarlier1', color: 'grey', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 1000 });
+    retryState.orphanedGroups.set(-2, { id: -2, title: 'RetryEarlier2', color: 'grey', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 900 });
+    retryState.orphanedGroups.set(5, { id: 5, title: 'RetryOrphan5', color: 'red', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 800 });
+
+    const liveState = new ShadowState();
+    liveState.orphanedGroups.set(-1, { id: -1, title: 'LiveOnly', color: 'purple', collapsed: false, rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now() - 700 });
+
+    // Chrome reuses id 5 for an unrelated live group -> retryState's own
+    // gated resurrection mismatches and requeues it during its own reconcile.
+    const retryGroups = [{ id: 5, title: 'Unrelated Live Group', color: 'green', collapsed: false, windowId: 1 }];
+
+    reconcileRetryGroups(retryState, retryGroups, new Map(), new Map(), liveState);
+
+    const titles = [...retryState.orphanedGroups.values()].map((e) => e.title);
+    assert.ok(titles.includes('RetryEarlier2'), 'retryState\'s own earlier quarantine entry survives the fresh requeue + union');
+    assert.ok(titles.includes('RetryOrphan5'), 'freshly requeued entry (seeded below retryState\'s own min) survives the union');
+    assert.ok(titles.includes('LiveOnly'), 'liveState\'s own entry merged in');
   });
 });
 

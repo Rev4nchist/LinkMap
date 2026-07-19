@@ -1,11 +1,12 @@
 # Project Roadmap
 
 ## Current Focus
-**PR #8 merged (2026-07-18)** — restart-fragility hardening + Phase 0 agent spikes are on `master` (`9ce6076`). 474 tests green. Fixes shipped: L-1/L-2 (sidebar position + nested-group headers), A-1 (native rename/recolor write-through), B-3 (MULTI_GROUP descendants), A-4 (quarantine windowId normalization), B-4 (cross-window group repair).
+**Stability queue substantially closed (2026-07-18, session 3)** — branch `fix/stability-queue` (5 commits, **500 tests green**, +26 new). **10 of 11 open items shipped** across three waves: Wave A = 5 CodeRabbit correctness fixes (`467fcf8`); Wave B = A-2 titled-restore color re-key, F8 workspace tabId remap, F7 crash-recovery flag, A-7 negative-key allocator (`2ee343c`, `17734ab`); Wave C = B-2/F9 cold-restart-aware Pass-1 matching + windowId vote gating via a new `chrome.storage.session` restart-detection primitive (`ac4f580`). Every fix TDD'd; independently gated by full-suite re-run on the combined branch. Branch is PR-ready (PR #8 pattern).
 
-Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: groundwork continues, but the Phase 1 build stays gated (elephant-2) on closing the remaining tab-group stability queue first.
-- Both architecture-gating spikes **PASS** (`docs/agent-integration/DESIGN-RESEARCH.md`): Spike 1 — #24135 does NOT reproduce on codex 0.144.1 (MCP tool calls complete without the `--dangerously-bypass-approvals-and-sandbox` flag); Spike 2 — panel-owned loopback WebSocket authenticates a real `chrome-extension://<id>` Origin with zero manifest changes. The #24135 blocker is resolved.
-- Decision fork for next session: (A) finish the stability queue, (B) run spikes 4-9, or (C) start agent Phase 1. See `thoughts/shared/handoffs/linkmap-agent-phase0/current.md`.
+**Deferred:** B-1 (durable lineage key) — consciously deferred to its own focused session (schema migration + anchored lineage pass + RR-2 test rewrite; high risk; heuristic recovery only). Design: `docs/design/b1-durable-lineage-key.md`.
+
+Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: with the stability queue closed, the elephant-2 gate is cleared. Both architecture-gating spikes already **PASS** (`docs/agent-integration/DESIGN-RESEARCH.md`): Spike 1 — #24135 does NOT reproduce on codex 0.144.1; Spike 2 — panel-owned loopback WebSocket authenticates a real `chrome-extension://<id>` Origin with zero manifest changes.
+- Next fork: (A) merge the stability branch → open PR, (B) run agent Phase 0 spikes 4-9 (Track B), (C) start agent Phase 1, or (D) tackle deferred B-1. See `thoughts/shared/handoffs/linkmap-agent-phase0/next-session-plan.md`.
 - Started: 2026-07-18
 
 ## Completed

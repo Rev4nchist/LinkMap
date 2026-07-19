@@ -7,7 +7,7 @@
  */
 
 import { ShadowState } from './shared/shadow-state.js';
-import { MSG, STORAGE_KEY, SETTINGS_KEY, WORKSPACES_KEY, TAB_NOTES_KEY } from './shared/constants.js';
+import { MSG, STORAGE_KEY, SETTINGS_KEY, WORKSPACES_KEY, TAB_NOTES_KEY, SW_SESSION_KEY } from './shared/constants.js';
 import { createContext, reconcileRetryGroups } from './background/context.js';
 import { createAutoGrouper } from './background/auto-group.js';
 import { createSessionManager } from './background/sessions.js';
@@ -23,7 +23,7 @@ import { normalizeUrl } from './background/duplicates.js';
 // ---------------------------------------------------------------------------
 
 const context = createContext();
-const { ctx, saveState, saveStateImmediate, commitState, broadcastState, suppressGroupTitleForBurst } = context;
+const { ctx, saveState, saveStateImmediate, commitState, commitStateNow, broadcastState, suppressGroupTitleForBurst } = context;
 
 // ---------------------------------------------------------------------------
 // 2. Create domain modules (factory pattern — receive context via DI)
@@ -62,6 +62,15 @@ async function init() {
   // saved snapshot, regardless of how far the try block got before failing.
   let savedData;
   try {
+    // 0. Restart-detection: chrome.storage.session is in-memory and is
+    // CLEARED on a full browser restart (and on extension reload/update),
+    // but SURVIVES service-worker suspend/wake — exactly the boundary where
+    // Chrome reassigns tab ids. Read it before any other await so no
+    // buffered tab event can race the check (MV3 guarantees a single SW).
+    const sessResult = await chrome.storage.session.get(SW_SESSION_KEY);
+    const coldRestart = !sessResult[SW_SESSION_KEY];
+    await chrome.storage.session.set({ [SW_SESSION_KEY]: { bootTs: Date.now() } });
+
     // 1. Load saved state
     const result = await chrome.storage.local.get(STORAGE_KEY);
     savedData = result[STORAGE_KEY];
@@ -89,7 +98,7 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const { windowIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
+    const { windowIdMap, tabIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs, { coldRestart });
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
@@ -101,7 +110,7 @@ async function init() {
         try {
           const retryLiveTabs = await chrome.tabs.query({});
           const retryState = ShadowState.fromStorage(savedData);
-          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
+          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs, { coldRestart });
 
           // Only swap if retry preserved MORE relationships
           if (retryStats.survivingRelationships > stats.survivingRelationships) {
@@ -137,8 +146,10 @@ async function init() {
 
             context.state = retryState;
 
-            saveState();
-            broadcastState();
+            // CR-recovery-save: write-through immediately — the debounced
+            // saveState() left a window where an SW suspend right after this
+            // swap would lose the improved retry reconciliation entirely.
+            commitStateNow();
           } else {
             console.log('[LinkMap] Retry did not improve — keeping original');
           }
@@ -179,8 +190,13 @@ async function init() {
 
     // 5. Save reconciled state immediately (A6) — the trailing 500ms
     // debounce must never be the only write between a fresh reconcile and a
-    // possible SW suspend/crash.
-    saveStateImmediate();
+    // possible SW suspend/crash. CR-context-persist: await it and observe
+    // failure — saveStateImmediate() never rejects, so this is safe inside
+    // the awaited init() and won't silently swallow a write failure.
+    const initSaveResult = await saveStateImmediate();
+    if (!initSaveResult?.success) {
+      console.error('[LinkMap] Initial state save after reconciliation failed:', initSaveResult?.error);
+    }
 
     // 6. Set up alarms
     sessions.setupAutoSaveAlarm();
@@ -193,6 +209,30 @@ async function init() {
       const wsData = wsResult[WORKSPACES_KEY];
       ctx.workspaces = wsData.workspaces || [];
       ctx.activeWorkspaceId = wsData.activeWorkspaceId || null;
+
+      // F8: workspace tabIds are saved membership lists outside the tree —
+      // reconcileWithLiveTabs() never touched them. Remap through tabIdMap
+      // (tabs that survived restart under a new id), keep ids that matched
+      // Pass 1 (same id, still live), and drop ids for tabs that never came
+      // back (closed while the browser was shut down).
+      let workspacesChanged = false;
+      for (const ws of ctx.workspaces) {
+        if (!Array.isArray(ws.tabIds) || ws.tabIds.length === 0) continue;
+        const remapped = [];
+        for (const id of ws.tabIds) {
+          if (tabIdMap.has(id)) {
+            remapped.push(tabIdMap.get(id));
+          } else if (context.state.tabs.has(id)) {
+            remapped.push(id);
+          }
+          // else: tab is gone — drop it
+        }
+        if (remapped.length !== ws.tabIds.length || remapped.some((id, i) => id !== ws.tabIds[i])) {
+          workspacesChanged = true;
+        }
+        ws.tabIds = remapped;
+      }
+      if (workspacesChanged) context.saveWorkspaces();
     }
     const notesResult = await chrome.storage.local.get(TAB_NOTES_KEY);
     ctx.tabNotes = notesResult[TAB_NOTES_KEY] || {};

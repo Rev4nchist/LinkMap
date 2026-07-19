@@ -9,9 +9,10 @@ setupMockDOM();
 // Import modules under test (after DOM mock)
 // ---------------------------------------------------------------------------
 
-const { reconcileChildren, getElementKey, patchElement } = await import(
+const { reconcileChildren, getElementKey, patchElement, renderTree } = await import(
   '../sidepanel/modules/tree-renderer.js'
 );
+const { DEFAULT_FAVICON } = await import('../shared/constants.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -382,5 +383,93 @@ describe('patchElement', () => {
 
     const titleEl = existing.querySelector('.group-title');
     assert.equal(titleEl.textContent, 'New');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: failed-favicon marker survives patchElement's full-replace path
+// (CR-favicon-map)
+// ---------------------------------------------------------------------------
+
+describe('failed favicon marker persistence (CR-favicon-map)', () => {
+  function makeState(tabs, rootIds, collapsed = []) {
+    return {
+      tabs, rootIds, collapsed, groupColors: {},
+      theme: 'midnight', activeTabId: null, tabNotes: {},
+    };
+  }
+
+  function makeTabNode(id, overrides = {}) {
+    return {
+      tabId: id,
+      parentId: null,
+      children: [],
+      title: `Tab ${id}`,
+      url: `https://example.com/${id}`,
+      favIconUrl: `https://bad.test/icon-${id}.png`,
+      pinned: false,
+      audible: false,
+      status: 'complete',
+      groupId: -1,
+      index: 0,
+      windowId: 1,
+      ...overrides,
+    };
+  }
+
+  it('keeps a known-failed tree favicon defaulted after a badge-triggered full replaceChildren', () => {
+    const parent = makeTabNode(501, { children: [502] });
+    const child = makeTabNode(502, { parentId: 501 });
+    const state = makeState({ 501: parent, 502: child }, [501]);
+    const container = new MockElement('main');
+    const pinnedList = new MockElement('div');
+
+    renderTree(state, null, container, pinnedList);
+    const favicon = container.querySelector('.tab-favicon');
+    // Simulate the parent tab's favicon actually failing to load.
+    favicon.onerror();
+    assert.equal(favicon.src, DEFAULT_FAVICON, 'favicon should fall back on load failure');
+
+    // Collapse the parent — this adds a "+N" badge child to its entry
+    // (buildTabEntry ~:280-284), which changes the entry's child count and
+    // forces patchElement onto its full replaceChildren fallback
+    // (~:564-568) instead of the targeted per-attribute patch path.
+    state.collapsed = [501];
+    renderTree(state, null, container, pinnedList);
+
+    const patchedEntry = container.querySelector('.tab-entry');
+    assert.ok(
+      patchedEntry.querySelector('.tab-badge'),
+      'sanity check: the full-replace branch must have fired (badge child added)'
+    );
+
+    const patchedFavicon = container.querySelector('.tab-favicon');
+    assert.equal(
+      patchedFavicon.src,
+      DEFAULT_FAVICON,
+      'known-failed favicon must stay defaulted after a full child replace, not re-fetch/flash the broken src'
+    );
+  });
+
+  it('lets a favicon recover after a full replaceChildren once the candidate src actually changes', () => {
+    const parent = makeTabNode(503, { children: [504] });
+    const child = makeTabNode(504, { parentId: 503 });
+    const state = makeState({ 503: parent, 504: child }, [503]);
+    const container = new MockElement('main');
+    const pinnedList = new MockElement('div');
+
+    renderTree(state, null, container, pinnedList);
+    container.querySelector('.tab-favicon').onerror();
+    assert.equal(container.querySelector('.tab-favicon').src, DEFAULT_FAVICON);
+
+    // Force the full-replace path (collapse -> badge added) AND change the
+    // favicon candidate at once.
+    state.collapsed = [503];
+    parent.favIconUrl = 'https://good.test/icon-503.png';
+    renderTree(state, null, container, pinnedList);
+
+    const patchedEntry = container.querySelector('.tab-entry');
+    assert.ok(patchedEntry.querySelector('.tab-badge'), 'sanity check: full-replace branch fired');
+    assert.equal(container.querySelector('.tab-favicon').src, 'https://good.test/icon-503.png');
   });
 });

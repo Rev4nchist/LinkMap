@@ -402,6 +402,12 @@ export function createMessageHandler({
                 sendResponse({ error: 'unpin_failed' });
                 return;
               }
+              // CR-move2group-unpin: write the unpin into shadow state
+              // synchronously — otherwise, if the pinned->false onUpdated
+              // event hasn't been processed yet, collectGroupableTabIds
+              // below still sees the stale pinned:true and drops
+              // payload.tabId itself out of the group.
+              context.state.updateTab(payload.tabId, { pinned: false });
             }
             // 4b/A9: group the tab AND any non-pinned descendants together —
             // otherwise "New Group" on a parent leaves its children behind.

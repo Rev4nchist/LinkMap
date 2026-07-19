@@ -62,13 +62,21 @@ export function createContext() {
     // a stale trailing debounce must never clobber this newer write.
     saveState.cancel();
     try {
-      // A10c: return the write promise so callers (e.g. sessions.js onSuspend)
-      // can await settlement instead of logging success before it lands.
+      // A10c/CR-context-persist: return the write promise so callers (e.g.
+      // sessions.js onSuspend) can await settlement instead of logging
+      // success before it lands. The promise resolves an OBSERVABLE
+      // {success, error} result and NEVER rejects — fire-and-forget callers
+      // like commitStateNow() rely on that so a write failure never becomes
+      // an unhandled rejection.
       return chrome.storage.local.set({ [STORAGE_KEY]: state.toSerializable() })
-        .catch(err => console.error('[LinkMap] saveState failed:', err));
+        .then(() => ({ success: true }))
+        .catch(err => {
+          console.error('[LinkMap] saveState failed:', err);
+          return { success: false, error: err };
+        });
     } catch (err) {
       console.error('[LinkMap] saveState serialization failed:', err);
-      return Promise.resolve();
+      return Promise.resolve({ success: false, error: err });
     }
   }
 
@@ -205,9 +213,17 @@ export function createContext() {
             finish();
           }
         } catch (e) {
-          // Service worker may have been suspended
+          // CR-context-persist: a chrome.tabGroups.query rejection (e.g. the
+          // service worker was briefly suspended) is transient — mirror the
+          // allHaveTitles retry path instead of giving up permanently on the
+          // very first failed round.
           ctx.DEBUG && console.warn('[LinkMap] retryMissingGroupTitles failed:', e);
-          finish();
+          retryCount++;
+          if (retryCount < retryDelays.length) {
+            attempt();
+          } else {
+            finish();
+          }
         }
       }, retryDelays[retryCount]);
     }
