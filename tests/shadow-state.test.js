@@ -1212,8 +1212,8 @@ describe('reconcileWithLiveTabs — return value includes stats', () => {
     s.addTab(1, makeTab({ tabId: 1, url: 'https://same.com' }));
     // Pass 2: URL-matched, remapped 100 -> 501.
     s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
-    // Pass 2b: title-matched (URL changed), remapped 200 -> 502.
-    s.addTab(200, makeTab({ tabId: 200, url: 'https://stale.example', title: 'Docs' }));
+    // Pass 2b: title-matched (URL changed within the SAME origin), remapped 200 -> 502.
+    s.addTab(200, makeTab({ tabId: 200, url: 'https://docs.example/old', title: 'Docs' }));
 
     const liveTabs = [
       makeLiveTab({ id: 1, url: 'https://same.com', index: 0 }),
@@ -1711,6 +1711,52 @@ describe('reconcileWithLiveTabs — coldRestart #6: same-id collision must not w
     } finally {
       console.warn = origWarn;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #7: Pass 2b title match must be same-origin
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — #7: Pass 2b title match must be same-origin', () => {
+  it('does not graft a url-changed CHILD onto a same-title CROSS-ORIGIN live tab', () => {
+    const s = new ShadowState();
+    // Parent + child. The child's url changed since save; a live tab shares the
+    // child's TITLE but is a different origin. Pass 2b must refuse — grafting the
+    // child's lineage onto a cross-origin tab is the bug (Codex #3). A lineage-
+    // bearing node is refused by Pass 3 too (RR-2b), so it falls to dead-sweep.
+    // (A lineage-FREE leaf is intentionally still recoverable by Pass 3 positional
+    // matching — that carries no lineage, so it is out of scope for #7.)
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: 'https://docs.example/report-draft', title: 'Report', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://evil.example/report', title: 'Report', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.ok(!tabIdMap.has(200), 'the child is NOT remapped onto the cross-origin live tab');
+    assert.equal(stats.pass2b, 0, 'Pass 2b did not fire for the cross-origin title match');
+    const crossOrigin = s.getTab(502);
+    assert.ok(crossOrigin, 'the cross-origin live tab exists as its own node');
+    assert.equal(crossOrigin.parentId, null, 'cross-origin tab is a root, not grafted under the saved parent');
+    assert.equal(crossOrigin.url, 'https://evil.example/report');
+  });
+
+  it('still matches a same-origin different-path url change (SPA/redirect recovery not over-refused)', () => {
+    const s = new ShadowState();
+    s.addTab(200, makeTab({ tabId: 200, windowId: 1, url: 'https://app.example/old', title: 'Inbox', index: 0 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://app.example/new', title: 'Inbox', index: 0 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(tabIdMap.get(200), 502, 'same-origin path change recovered via Pass 2b');
+    assert.equal(stats.pass2b, 1, 'Pass 2b fired for the same-origin title match');
   });
 });
 
