@@ -1856,6 +1856,29 @@ describe('reconcileWithLiveTabs — coldRestart #8: Pass 1 title corroboration m
 });
 
 // ---------------------------------------------------------------------------
+// #9: sameIdMatched return value (external id-keyed store safety)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — #9: sameIdMatched identifies tabs still at their own id', () => {
+  it('includes Pass-1 matched ids and excludes rejected/recycled ids', () => {
+    const s = new ShadowState();
+    s.addTab(7, makeTab({ tabId: 7, windowId: 100, url: 'https://keep.example/x', title: 'Keep', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://mail.example/inbox', title: 'Inbox', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 7, windowId: 100, url: 'https://keep.example/x', title: 'Keep', index: 0 }),   // corroborated -> Pass 1
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://evil.example/x', title: 'Evil', index: 1 }),   // collision -> rejected + recycled
+    ];
+
+    const { sameIdMatched } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.ok(sameIdMatched instanceof Set, 'sameIdMatched is a Set');
+    assert.ok(sameIdMatched.has(7), 'a Pass-1 matched id is present (still the same tab)');
+    assert.ok(!sameIdMatched.has(42), 'a rejected/recycled id is absent (its id now hosts a different tab)');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tree-integrity hardening (TI-1, TI-2, TI-3)
 // ---------------------------------------------------------------------------
 

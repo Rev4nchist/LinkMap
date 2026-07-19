@@ -906,6 +906,13 @@ export class ShadowState {
     // These are genuinely unmatched — they must be dead-swept, not left to be
     // content-overwritten by the colliding tab while keeping stale lineage.
     const pass1Rejected = new Set();
+    // #9: saved ids that Pass 1 matched to their OWN live id (the tab is still at
+    // its original id). Callers use this to update external id-keyed stores that
+    // reconcile doesn't touch (e.g. workspace membership): an id still refers to
+    // the same tab iff it's remapped in tabIdMap OR present here. Any other
+    // referenced id was closed, or was recycled by a DIFFERENT tab on cold restart
+    // (`this.tabs.has(id)` alone can't tell those apart), and must be dropped.
+    const sameIdMatched = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
     const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
     // F8: accumulate old->new tabId remaps across passes 2/2b/3 so callers
@@ -973,6 +980,7 @@ export class ShadowState {
         }
         if (accept) {
           matchedLiveIds.add(id);
+          sameIdMatched.add(id);
           pass1Count++;
         } else {
           // Cold-restart id collision with an unrelated tab — record it so the
@@ -1343,7 +1351,7 @@ export class ShadowState {
     };
     console.log('[LinkMap] Reconciliation:', JSON.stringify(stats));
 
-    return { windowIdMap, tabIdMap, stats };
+    return { windowIdMap, tabIdMap, sameIdMatched, stats };
   }
 
   /**

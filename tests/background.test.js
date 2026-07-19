@@ -410,6 +410,37 @@ describe('background.js initialization', () => {
     assert.ok(stored, 'workspaces were re-saved after reconcile');
     assert.deepEqual(stored.workspaces[0].tabIds, [501], 'tabId remapped through reconcile, closed tab dropped');
   });
+
+  it('#9: drops a workspace member whose id was recycled by an unrelated tab on cold restart', async () => {
+    const savedState = {
+      version: 1,
+      tabs: {
+        42: { tabId: 42, parentId: null, children: [], title: 'Inbox', url: 'https://mail.example/inbox', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+      },
+      rootIds: [42],
+      collapsed: [],
+      groupColors: {},
+      theme: 'dracula',
+    };
+
+    chromeMock.storage.local._data.linkmap_workspaces = {
+      workspaces: [{ id: 'w1', name: 'Work', tabIds: [42] }],
+      activeWorkspaceId: 'w1',
+    };
+
+    // Cold restart (empty session marker): id 42 is coincidentally reused by an
+    // UNRELATED tab; the original mail tab never came back.
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 42, active: true })];
+      return [makeChromeTab({ id: 42, title: 'Evil', url: 'https://evil.example/x', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, savedState);
+
+    const stored = chromeMock.storage.local._data.linkmap_workspaces;
+    assert.deepEqual(stored.workspaces[0].tabIds, [], 'recycled id dropped, not aliased to the unrelated tab');
+  });
 });
 
 // ---------------------------------------------------------------------------
