@@ -322,6 +322,72 @@ describe('background.js initialization', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: CR-recovery-save — deferred retry-reconciliation swap write-through
+// ---------------------------------------------------------------------------
+
+describe('background.js deferred retry-reconciliation write-through (CR-recovery-save)', () => {
+  let chromeMock;
+
+  beforeEach(() => {
+    chromeMock = createChromeMock();
+  });
+
+  afterEach(() => {
+    delete globalThis.chrome;
+  });
+
+  it('persists the swapped-in retry state immediately, not via the 500ms debounce', async () => {
+    const savedState = {
+      version: 1,
+      tabs: {
+        1: { tabId: 1, parentId: null, children: [2], title: 'Saved Root', url: 'https://saved.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+        2: { tabId: 2, parentId: 1, children: [], title: 'Saved Child', url: 'https://child.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 1, windowId: 1 },
+      },
+      rootIds: [1],
+      collapsed: [],
+      groupColors: {},
+      theme: 'dracula',
+    };
+
+    let fullQueryCallCount = 0;
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 101, active: true })];
+      fullQueryCallCount += 1;
+      if (fullQueryCallCount === 1) {
+        // Initial reconcile: completely unrelated live tabs (different ids,
+        // urls, titles, windowId) — tab1/tab2 match nothing and get
+        // dead-removed, so survivingRelationships drops to 0 while
+        // savedRelationships was 1 — triggers the 2s deferred retry.
+        return [
+          makeChromeTab({ id: 101, index: 0, windowId: 2, title: 'Unrelated A', url: 'https://unrelated-a.example' }),
+          makeChromeTab({ id: 102, index: 1, windowId: 2, title: 'Unrelated B', url: 'https://unrelated-b.example' }),
+        ];
+      }
+      // Retry reconcile (fires ~2s later): live tabs now match the saved
+      // snapshot by id, so the parent/child relationship survives.
+      return [
+        makeChromeTab({ id: 1, index: 0, title: 'Saved Root', url: 'https://saved.com' }),
+        makeChromeTab({ id: 2, index: 1, title: 'Saved Child', url: 'https://child.com' }),
+      ];
+    });
+
+    await loadBackground(chromeMock, savedState);
+
+    // Wait past the 2s deferred-retry trigger, but well under the 500ms
+    // debounce window that would fire *after* that (2000 + 500 = 2500ms).
+    // With the fix (commitStateNow), the write lands synchronously as part
+    // of the retry callback itself — no additional debounce wait needed.
+    await new Promise((r) => setTimeout(r, 2150));
+
+    const setCalls = chromeMock.storage.local.set.mock.calls;
+    const retrySwapWrite = setCalls.find(
+      (c) => c.arguments[0]?.linkmap_state?.tabs?.[2]?.parentId === 1
+    );
+    assert.ok(retrySwapWrite, 'the retry-swapped state (with the surviving parent/child relationship) was persisted within ~150ms of the swap, not after an additional 500ms debounce');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: SW-5 — init failure liveness (A7)
 // ---------------------------------------------------------------------------
 
@@ -505,6 +571,32 @@ describe('background/context.js: persistence and sweep (A5, A6, 2d)', () => {
     assert.equal(setCalls.length, 1, 'the cancelled debounce never fired a second write');
   });
 
+  it('CR-context-persist: saveStateImmediate resolves an observable {success:true} on a successful write and never rejects', async () => {
+    globalThis.chrome = {
+      storage: { local: { set: async () => {} } },
+      runtime: { sendMessage: async () => {} },
+    };
+    const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+    const context = createContext();
+
+    const result = await context.saveStateImmediate();
+    assert.deepEqual(result, { success: true });
+  });
+
+  it('CR-context-persist: saveStateImmediate resolves {success:false, error} on a rejected write instead of rejecting or resolving undefined', async () => {
+    const writeError = new Error('quota exceeded');
+    globalThis.chrome = {
+      storage: { local: { set: async () => { throw writeError; } } },
+      runtime: { sendMessage: async () => {} },
+    };
+    const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+    const context = createContext();
+
+    const result = await context.saveStateImmediate();
+    assert.equal(result.success, false);
+    assert.equal(result.error, writeError);
+  });
+
   it('A5: retryMissingGroupTitles single-flights — a re-trigger while running is queued, not run concurrently', async () => {
     globalThis.chrome = {
       storage: { local: { set: async () => {} } },
@@ -555,6 +647,50 @@ describe('background/context.js: persistence and sweep (A5, A6, 2d)', () => {
       await new Promise((r) => setTimeout(r, 2200));
 
       assert.equal(updateCalls.length, 1, 'chrome.tabGroups.update called to push the rescued title');
+      assert.equal(updateCalls[0].id, 5);
+      assert.equal(updateCalls[0].changes.title, 'Rescued Title');
+    } finally {
+      delete globalThis.chrome;
+    }
+  });
+
+  it('CR-context-persist: retryMissingGroupTitles retries after a transient chrome.tabGroups.query rejection instead of giving up on the first failed round', async () => {
+    const updateCalls = [];
+    let queryCallCount = 0;
+    globalThis.chrome = {
+      storage: { local: { set: async () => {} } },
+      runtime: { sendMessage: async () => {} },
+      tabGroups: {
+        query: async () => {
+          queryCallCount += 1;
+          if (queryCallCount === 1) {
+            // Simulate a transient failure (e.g. SW briefly suspended).
+            throw new Error('service worker suspended');
+          }
+          return [{ id: 5, title: '', color: 'blue', collapsed: false, windowId: 1 }];
+        },
+        update: async (id, changes) => { updateCalls.push({ id, changes }); return {}; },
+      },
+    };
+    try {
+      const { createContext } = await import(`../background/context.js?t=${Date.now()}-${Math.random()}`);
+      const context = createContext();
+
+      context.state.addTab(1, { tabId: 1, parentId: null, groupId: 5, title: 'T', url: 'https://x.com', index: 0, windowId: 1 });
+      context.state.addGroup({ id: 5, title: '', color: 'blue', collapsed: false, windowId: 1 });
+      context.state.orphanedGroups.set(99, {
+        id: 99, title: 'Rescued Title', color: 'blue', collapsed: false,
+        rawWindowId: 1, count: 1, colorOverride: undefined, orphanedAt: Date.now(),
+      });
+
+      context.retryMissingGroupTitles();
+
+      // First attempt fires at 2000ms and rejects; the second attempt fires
+      // at 2000+4000=6000ms and should succeed.
+      await new Promise((r) => setTimeout(r, 6300));
+
+      assert.ok(queryCallCount >= 2, 'a rejected round did not stop the retry chain');
+      assert.equal(updateCalls.length, 1, 'the retry after the transient failure still rescued the title');
       assert.equal(updateCalls[0].id, 5);
       assert.equal(updateCalls[0].changes.title, 'Rescued Title');
     } finally {
@@ -1416,6 +1552,35 @@ describe('MOVE_TO_GROUP groups descendants and write-through (4b/A10a)', () => {
       (c) => c.arguments[0]?.linkmap_state?.tabs?.[2]?.groupId === 42
     );
     assert.ok(setCall, 'write-through commit persisted the descendant groupId immediately');
+  });
+
+  it('CR-move2group-unpin: writes the unpin into shadow state before collecting groupable ids, so the primary tab is not dropped by a stale pinned flag', async () => {
+    // Shadow state loads tab 1 as pinned:true (its last known live state).
+    chromeMock.tabs.query = mock.fn(async (q) => {
+      if (q && q.active) return [makeChromeTab({ id: 1, active: true, pinned: true })];
+      return [makeChromeTab({ id: 1, index: 0, pinned: true })];
+    });
+    // chrome.tabs.get first reports pinned:true (matching the tab's stale
+    // shadow-state pinned flag), then reports pinned:false once
+    // chrome.tabs.update has "unpinned" it — simulating the onUpdated event
+    // not having reached shadow state yet.
+    let getCallCount = 0;
+    chromeMock.tabs.get = mock.fn(async (id) => {
+      getCallCount += 1;
+      return { id, pinned: getCallCount === 1 };
+    });
+    chromeMock.tabs.update = mock.fn(async () => {});
+    chromeMock.tabs.group = mock.fn(async () => 99);
+    await loadBackground(chromeMock);
+
+    const listener = chromeMock._listeners['runtime.onMessage'][0];
+    let response = null;
+    listener({ type: 'MOVE_TO_GROUP', payload: { tabId: 1, groupId: null } }, {}, (r) => { response = r; });
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.deepEqual(response, { groupId: 99 });
+    const groupCall = chromeMock.tabs.group.mock.calls[0].arguments[0];
+    assert.deepEqual(groupCall.tabIds, [1], 'the primary tabId must not be dropped out of the group by a stale pinned flag');
   });
 });
 

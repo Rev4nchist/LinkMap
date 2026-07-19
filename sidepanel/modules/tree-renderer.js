@@ -253,7 +253,12 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
   }
 
   // Favicon
-  const faviconSrc = getFaviconUrl(tab);
+  const candidateFaviconSrc = getFaviconUrl(tab);
+  const failedFaviconSrc = failedFaviconSrcs.get(tab.tabId);
+  if (failedFaviconSrc && failedFaviconSrc !== candidateFaviconSrc) {
+    failedFaviconSrcs.delete(tab.tabId);
+  }
+  const faviconSrc = failedFaviconSrc === candidateFaviconSrc ? DEFAULT_FAVICON : candidateFaviconSrc;
   const faviconClasses = tab.status === 'loading'
     ? 'tab-favicon tab-loading'
     : 'tab-favicon';
@@ -265,7 +270,8 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
     height: '16',
     alt: '',
   });
-  armFaviconFallback(favicon);
+  if (failedFaviconSrc === candidateFaviconSrc) favicon.dataset.failedSrc = candidateFaviconSrc;
+  armFaviconFallback(favicon, tab.tabId);
 
   // Title
   const title = el('span', { className: 'tab-title' }, tab.title || tab.url || '');
@@ -358,20 +364,27 @@ function buildTabEntry(tab, depth, tabs, collapsedSet, activeTabId, groupColors,
   return entry;
 }
 
+// Shared tabId-keyed map recording each tab's last-known-failed favicon URL.
+// Single source of truth for both pinned tiles and tree entries (and for
+// patchElement's reconciliation) — a marker stored only on a DOM node
+// (favicon.dataset.failedSrc) is lost whenever patchElement falls through
+// to its full replaceChildren path, which would otherwise cause a
+// known-broken favicon to re-fetch/flash after that replace.
+const failedFaviconSrcs = new Map();
+
 /**
  * Builds a compact pinned tab tile.
  *
  * @param {Object} tab - TabNode (pinned)
  * @returns {HTMLElement}
  */
-const failedPinnedFaviconSrcs = new Map();
 
-function armFaviconFallback(favicon, onFailure) {
+function armFaviconFallback(favicon, tabId) {
   favicon.onerror = () => {
     const failedSrc = favicon.src;
     if (!failedSrc || failedSrc === DEFAULT_FAVICON) return;
     favicon.dataset.failedSrc = failedSrc;
-    onFailure?.(failedSrc);
+    if (tabId !== undefined && tabId !== null) failedFaviconSrcs.set(tabId, failedSrc);
     favicon.src = DEFAULT_FAVICON;
     favicon.setAttribute('src', DEFAULT_FAVICON);
   };
@@ -379,9 +392,9 @@ function armFaviconFallback(favicon, onFailure) {
 
 function buildPinnedTab(tab) {
   const candidateSrc = getFaviconUrl(tab);
-  const failedSrc = failedPinnedFaviconSrcs.get(tab.tabId);
+  const failedSrc = failedFaviconSrcs.get(tab.tabId);
   if (failedSrc && failedSrc !== candidateSrc) {
-    failedPinnedFaviconSrcs.delete(tab.tabId);
+    failedFaviconSrcs.delete(tab.tabId);
   }
   const faviconSrc = failedSrc === candidateSrc ? DEFAULT_FAVICON : candidateSrc;
 
@@ -392,7 +405,7 @@ function buildPinnedTab(tab) {
     alt: '',
   });
   if (failedSrc === candidateSrc) favicon.dataset.failedSrc = candidateSrc;
-  armFaviconFallback(favicon, (src) => failedPinnedFaviconSrcs.set(tab.tabId, src));
+  armFaviconFallback(favicon, tab.tabId);
 
   return el('div', {
     className: 'pinned-tab',
@@ -549,6 +562,11 @@ export function patchElement(existing, incoming) {
   const existingFav = existing.querySelector?.('.tab-favicon');
   const incomingFav = incoming.querySelector?.('.tab-favicon');
   if (existingFav && incomingFav) {
+    // tabId keys into the shared failedFaviconSrcs map (see armFaviconFallback)
+    // so a failure detected while patched-in-place — not just one rebuilt via
+    // buildTabEntry/buildPinnedTab — is recorded centrally, not only on this
+    // particular DOM node (which a later full replaceChildren would discard).
+    const tabId = existing.dataset?.tabId !== undefined ? Number(existing.dataset.tabId) : undefined;
     const candidateSrc = incomingFav.src;
     const failedSrc = existingFav.dataset.failedSrc;
     if (candidateSrc !== failedSrc && existingFav.src !== candidateSrc) {
@@ -556,7 +574,7 @@ export function patchElement(existing, incoming) {
       existingFav.src = candidateSrc;
       existingFav.setAttribute('src', candidateSrc);
     }
-    armFaviconFallback(existingFav);
+    armFaviconFallback(existingFav, tabId);
   }
 
   // Badge and note reconciliation — if child count changed (badge added/removed,

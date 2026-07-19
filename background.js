@@ -23,7 +23,7 @@ import { normalizeUrl } from './background/duplicates.js';
 // ---------------------------------------------------------------------------
 
 const context = createContext();
-const { ctx, saveState, saveStateImmediate, commitState, broadcastState, suppressGroupTitleForBurst } = context;
+const { ctx, saveState, saveStateImmediate, commitState, commitStateNow, broadcastState, suppressGroupTitleForBurst } = context;
 
 // ---------------------------------------------------------------------------
 // 2. Create domain modules (factory pattern — receive context via DI)
@@ -137,8 +137,10 @@ async function init() {
 
             context.state = retryState;
 
-            saveState();
-            broadcastState();
+            // CR-recovery-save: write-through immediately — the debounced
+            // saveState() left a window where an SW suspend right after this
+            // swap would lose the improved retry reconciliation entirely.
+            commitStateNow();
           } else {
             console.log('[LinkMap] Retry did not improve — keeping original');
           }
@@ -179,8 +181,13 @@ async function init() {
 
     // 5. Save reconciled state immediately (A6) — the trailing 500ms
     // debounce must never be the only write between a fresh reconcile and a
-    // possible SW suspend/crash.
-    saveStateImmediate();
+    // possible SW suspend/crash. CR-context-persist: await it and observe
+    // failure — saveStateImmediate() never rejects, so this is safe inside
+    // the awaited init() and won't silently swallow a write failure.
+    const initSaveResult = await saveStateImmediate();
+    if (!initSaveResult?.success) {
+      console.error('[LinkMap] Initial state save after reconciliation failed:', initSaveResult?.error);
+    }
 
     // 6. Set up alarms
     sessions.setupAutoSaveAlarm();

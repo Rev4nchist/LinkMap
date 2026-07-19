@@ -10,7 +10,7 @@
 import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createMoveHelpers, collectGroupableTabIds } from '../background/move-helpers.js';
+import { createMoveHelpers, collectGroupableTabIds, collectMovableTabIds } from '../background/move-helpers.js';
 import { ShadowState } from '../shared/shadow-state.js';
 import { UNGROUPED_GROUP_ID } from '../shared/constants.js';
 
@@ -61,6 +61,31 @@ describe('collectGroupableTabIds (A9)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// collectMovableTabIds (CR-move-pinned — chrome.tabs.move() id-set)
+// ---------------------------------------------------------------------------
+
+describe('collectMovableTabIds (CR-move-pinned)', () => {
+  it('includes the tab and ALL descendants, pinned included', () => {
+    const state = buildTree();
+    const ids = collectMovableTabIds(state, 1);
+    assert.deepEqual(ids, [1, 2, 3], 'pinned grandchild (3) included, unrelated tab (4) excluded');
+  });
+
+  it('includes the root tab itself even when it is pinned', () => {
+    const state = buildTree();
+    state.updateTab(1, { pinned: true });
+    const ids = collectMovableTabIds(state, 1);
+    assert.deepEqual(ids, [1, 2, 3]);
+  });
+
+  it('returns just the tab id when it has no descendants', () => {
+    const state = buildTree();
+    const ids = collectMovableTabIds(state, 4);
+    assert.deepEqual(ids, [4]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // moveTabToGroup (4b/A9 — group-header drop)
 // ---------------------------------------------------------------------------
 
@@ -101,11 +126,11 @@ describe('moveTabToGroup (4b/A9)', () => {
 
     assert.equal(globalThis.chrome.tabs.move.mock.callCount(), 1, 'cross-window group-header drop moves first');
     const moveCall = globalThis.chrome.tabs.move.mock.calls[0];
-    assert.deepEqual(moveCall.arguments[0], [1, 2]);
+    assert.deepEqual(moveCall.arguments[0], [1, 2, 3], 'pinned grandchild (3) is physically moved too');
     assert.equal(moveCall.arguments[1].windowId, 2);
 
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1, 'groups after the move confirms');
-    assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2]);
+    assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2], 'group() still excludes the pinned tab');
   });
 
   it('groups in place when the target group is untracked in state (defensive default)', async () => {
@@ -142,17 +167,17 @@ describe('moveTabAsChild cross-window group sync (4c/A9)', () => {
     };
   });
 
-  it('moves the full non-pinned subtree and regroups when targetGroupId is supplied', async () => {
+  it('moves the full subtree (pinned included) and regroups the non-pinned subset when targetGroupId is supplied', async () => {
     const mode = helpers.moveTabAsChild(1, null, true, 2, 700);
     assert.equal(mode, 'async');
     await new Promise((r) => setTimeout(r, 10));
 
     assert.equal(globalThis.chrome.tabs.move.mock.callCount(), 1);
-    assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2]);
+    assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2, 3], 'pinned grandchild (3) is physically moved too');
 
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1, 'regroups after the window move confirms');
     const groupCall = globalThis.chrome.tabs.group.mock.calls[0].arguments[0];
-    assert.deepEqual(groupCall.tabIds, [1, 2]);
+    assert.deepEqual(groupCall.tabIds, [1, 2], 'group() still excludes the pinned tab');
     assert.equal(groupCall.groupId, 700);
     assert.equal(globalThis.chrome.tabs.ungroup.mock.callCount(), 0);
     assert.equal(commitState.mock.callCount(), 1);
@@ -212,9 +237,9 @@ describe('moveTabBeforeAfter cross-window group sync (4c/A9)', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     assert.equal(globalThis.chrome.tabs.move.mock.callCount(), 1);
-    assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2]);
+    assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2, 3], 'pinned grandchild (3) is physically moved too');
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1);
-    assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2]);
+    assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2], 'group() still excludes the pinned tab');
   });
 });
 
