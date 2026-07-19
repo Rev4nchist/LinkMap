@@ -516,7 +516,7 @@ describe('toSerializable', () => {
   it('returns a plain object with version and savedAt', () => {
     const s = new ShadowState();
     const data = s.toSerializable();
-    assert.equal(data.version, 1);
+    assert.equal(data.version, 2);
     assert.ok(typeof data.savedAt === 'string');
   });
 
@@ -599,6 +599,78 @@ describe('fromStorage', () => {
     assert.equal(restored.tabs.get(2).parentId, 1);
     assert.deepEqual(restored.rootIds, [1, 3]);
     assert.equal(restored.theme, 'oled');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lmId — durable lineage key (B-1)
+// ---------------------------------------------------------------------------
+
+describe('lmId — durable lineage key (B-1)', () => {
+  it('backfills a unique lmId for every node in a v1 fixture lacking lmId, and seeds nextLmId above the max', () => {
+    // A pre-B-1 (v1) persisted snapshot: plain nodes with no lmId field at
+    // all, and no top-level nextLmId — exactly what fromStorage() sees today
+    // in production before this migration ships.
+    const data = {
+      tabs: {
+        1: serializedNode({ tabId: 1, children: [2], index: 0 }),
+        2: serializedNode({ tabId: 2, parentId: 1, index: 1 }),
+        3: serializedNode({ tabId: 3, index: 2 }),
+      },
+      rootIds: [1, 3],
+      collapsed: [],
+    };
+
+    const s = ShadowState.fromStorage(data);
+
+    const lmIds = [1, 2, 3].map((id) => s.getTab(id).lmId);
+    for (const lmId of lmIds) {
+      assert.equal(typeof lmId, 'number', 'every migrated node gets a numeric lmId');
+    }
+    assert.equal(new Set(lmIds).size, 3, 'all backfilled lmIds are unique');
+    assert.ok(s.nextLmId > Math.max(...lmIds), 'nextLmId is seeded strictly above the max assigned lmId');
+
+    // _validateAndRepair must still pass — tree shape unaffected by the migration.
+    assert.deepEqual(s.rootIds, [1, 3]);
+    assert.deepEqual(s.getTab(1).children, [2]);
+  });
+
+  it('preserves lmId across replaceTabId (tabId churn does not lose lineage identity)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    const originalLmId = s.getTab(1).lmId;
+    assert.equal(typeof originalLmId, 'number');
+
+    s.replaceTabId(1, 501);
+
+    assert.equal(s.getTab(1), null, 'old id no longer present');
+    assert.equal(s.getTab(501)?.lmId, originalLmId, 'lmId survives the tabId rename');
+  });
+
+  it('assigns a fresh, unique, monotonically-increasing lmId to each newly added tab', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2 }));
+    s.addTab(3, makeTab({ tabId: 3 }));
+
+    const lmIds = [1, 2, 3].map((id) => s.getTab(id).lmId);
+    assert.equal(new Set(lmIds).size, 3, 'all lmIds are unique');
+    assert.ok(lmIds[0] < lmIds[1] && lmIds[1] < lmIds[2], 'lmIds are assigned monotonically');
+  });
+
+  it('round-trips lmId and nextLmId through toSerializable / fromStorage', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1 }));
+    s.addTab(2, makeTab({ tabId: 2, parentId: 1 }));
+    const lmId1 = s.getTab(1).lmId;
+    const lmId2 = s.getTab(2).lmId;
+    const nextLmIdBefore = s.nextLmId;
+
+    const restored = ShadowState.fromStorage(s.toSerializable());
+
+    assert.equal(restored.getTab(1).lmId, lmId1, 'parent lmId preserved through round-trip');
+    assert.equal(restored.getTab(2).lmId, lmId2, 'child lmId preserved through round-trip');
+    assert.equal(restored.nextLmId, nextLmIdBefore, 'nextLmId counter preserved through round-trip');
   });
 });
 
@@ -1262,7 +1334,53 @@ describe('reconcileWithLiveTabs — RR-1: same-URL tabs across windows keep thei
   });
 });
 
-describe('reconcileWithLiveTabs — RR-2: lineage-bearing nodes are not positionally guessed', () => {
+// RR-2 was split for B-1 (durable lineage key): the anchored re-association
+// pass adds a genuine new capability (RR-2a) on top of the pre-existing
+// safety invariant (RR-2b, unchanged from before B-1).
+describe('reconcileWithLiveTabs — RR-2a: anchored re-association (parent survives, child corroborated)', () => {
+  it('re-attaches a corroborated child under its matched parent, even when the window map is not yet known when Pass 2b evaluates it', () => {
+    const s = new ShadowState();
+    // Parent (tab 1): title is globally unique among live tabs, but its URL
+    // changes across restart, so neither Pass 1 (id changed) nor Pass 2 (URL
+    // bucket miss) can match it — it only resolves in Pass 2b, by title.
+    s.addTab(1, makeTab({
+      tabId: 1, windowId: 100, url: 'https://photos.example/family-trip',
+      title: 'Family Trip Photos 2024', index: 0,
+    }));
+    // Child (tab 5): its saved URL also changes across restart (no Pass 2
+    // bucket hit), and its title ('Report') is shared by a decoy live tab in
+    // an UNRELATED window. Because Pass 2b computes its window map ONCE
+    // before its loop runs, and the parent match happens earlier IN THE SAME
+    // loop, Pass 2b evaluates the child without yet knowing window 100 maps
+    // to window 500 — so it sees a global, unresolved ambiguity ([511, 512])
+    // and correctly refuses. Pass 3 also refuses it (RR-2: lineage-bearing).
+    // Only the anchored pass — which looks up the parent's LIVE window
+    // directly rather than through the vote-based map — can resolve it.
+    s.addTab(5, makeTab({
+      tabId: 5, parentId: 1, windowId: 100, url: 'https://docs.example/report-draft',
+      title: 'Report', index: 1,
+    }));
+
+    const liveTabs = [
+      // Parent's live tab: same title, different URL, window 500.
+      makeLiveTab({ id: 550, windowId: 500, url: 'https://photos.example/family-trip?updated=1', title: 'Family Trip Photos 2024', index: 0 }),
+      // Correct anchor-window candidate for the child.
+      makeLiveTab({ id: 511, windowId: 500, url: 'https://docs.example/report-final', title: 'Report', index: 5 }),
+      // Decoy: same title, wrong window — must NOT be chosen.
+      makeLiveTab({ id: 512, windowId: 900, url: 'https://docs.example/other-report', title: 'Report', index: 9 }),
+    ];
+
+    const { stats, tabIdMap } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 0, 'sanity: parent/child ids changed, Pass 1 does not fire');
+    assert.equal(s.getTab(550)?.title, 'Family Trip Photos 2024', 'parent matched via Pass 2b');
+    assert.equal(s.getTab(511)?.parentId, 550, 'child re-attaches under its matched parent');
+    assert.equal(tabIdMap.get(5), 511, 'child (saved id 5) remapped to the correct in-window candidate');
+    assert.equal(s.getTab(512)?.parentId, null, 'the wrong-window decoy remains an untouched root tab, not consumed as the child');
+  });
+});
+
+describe('reconcileWithLiveTabs — RR-2b: lineage-bearing nodes are not positionally guessed', () => {
   it('re-roots a surviving child instead of attaching it to an unrelated nearby tab', () => {
     const s = new ShadowState();
     // Parent (tab 1) is generic (empty url/title) so it fails url+title matching; it has a real child (tab 5).
@@ -1281,6 +1399,60 @@ describe('reconcileWithLiveTabs — RR-2: lineage-bearing nodes are not position
     assert.equal(s.getTab(510)?.parentId, null, 'surviving child is re-rooted, not mis-attached');
     assert.ok(!s.getTab(999)?.children.includes(510), 'unrelated tab did not adopt the orphan');
     assert.equal(s.getTab(1), null, 'dead parent removed');
+  });
+});
+
+describe('reconcileWithLiveTabs — B-1: anchored pass refuses uncorroborated matches (coldRestart)', () => {
+  it('does not graft an uncorroborated positionally-adjacent tab onto a matched parent', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({
+      tabId: 1, windowId: 100, url: 'https://app.example/dashboard',
+      title: 'Dashboard', index: 0,
+    }));
+    // Child has no usable url/title signal at all (fully generic).
+    s.addTab(5, makeTab({
+      tabId: 5, parentId: 1, windowId: 100, url: '', title: '', index: 1,
+    }));
+
+    const liveTabs = [
+      // Parent matches cleanly via Pass 2 (unique URL match).
+      makeLiveTab({ id: 601, windowId: 600, url: 'https://app.example/dashboard', title: 'Dashboard', index: 0 }),
+      // The only other unmatched live tab in the parent's window — adjacent,
+      // but carries no url/title relationship to the saved child whatsoever.
+      makeLiveTab({ id: 602, windowId: 600, url: 'https://random.example/whatever', title: 'Something Unrelated', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(s.getTab(5), null, 'the uncorroborated child is not silently kept under the wrong tab');
+    assert.equal(s.getTab(602)?.parentId, null, 'unrelated adjacent live tab is not grafted as a child');
+    assert.ok(!s.getTab(601)?.children.includes(602), 'parent does not adopt the uncorroborated adjacent tab');
+  });
+});
+
+describe('reconcileWithLiveTabs — B-1: anchored pass is a no-op on warm wake (regression lock)', () => {
+  it('leaves the RR-2a fixture unmatched when coldRestart is not passed', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({
+      tabId: 1, windowId: 100, url: 'https://photos.example/family-trip',
+      title: 'Family Trip Photos 2024', index: 0,
+    }));
+    s.addTab(5, makeTab({
+      tabId: 5, parentId: 1, windowId: 100, url: 'https://docs.example/report-draft',
+      title: 'Report', index: 1,
+    }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 550, windowId: 500, url: 'https://photos.example/family-trip?updated=1', title: 'Family Trip Photos 2024', index: 0 }),
+      makeLiveTab({ id: 511, windowId: 500, url: 'https://docs.example/report-final', title: 'Report', index: 5 }),
+      makeLiveTab({ id: 512, windowId: 900, url: 'https://docs.example/other-report', title: 'Report', index: 9 }),
+    ];
+
+    // No { coldRestart: true } — warm wake default.
+    s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(s.getTab(5), null, 'child stays unmatched — the anchored pass never runs on warm wake');
+    assert.equal(s.getTab(511)?.parentId, null, 'candidate tab is untouched, not grafted');
   });
 });
 
