@@ -96,20 +96,35 @@ function pickReconcileCandidate(candidates, savedNode, winMap, useTitle) {
 }
 
 /**
- * True when two URLs share an origin (scheme + host + port). Gates title-only
- * lineage recovery so a same-title but cross-origin tab is never grafted (Pass
- * 2b #7; also the anchored pass). Malformed/empty URLs → false (refuse-by-
- * default). Note: http and https are DIFFERENT origins by spec, so a scheme
- * upgrade reads as cross-origin (re-roots rather than mis-grafts).
+ * True when two URLs are the "same origin" for lineage-recovery corroboration
+ * (Pass 1 #8, Pass 2b #7, anchored pass). Normal schemes compare true origins
+ * (scheme + host + port). Opaque-origin schemes (chrome:, about:, data:, file:)
+ * all report origin "null", so they compare scheme + host + path instead
+ * (ignoring query/fragment): file:///x#a and file:///x#b are the same document
+ * (same tab, fragment change) but chrome://settings and chrome://extensions are
+ * not. Malformed/empty URLs → false (refuse-by-default). http and https are
+ * DIFFERENT origins by spec, so a scheme upgrade reads as cross-origin.
  */
 function sameOrigin(a, b) {
   try {
-    // Opaque-origin schemes (chrome:, about:, data:, file:) all report origin
-    // "null"; treating those as equal would let e.g. chrome://settings match
-    // chrome://extensions. An opaque origin is never same-origin for our purposes.
-    const originA = new URL(a).origin;
-    return originA !== 'null' && originA === new URL(b).origin;
+    const ua = new URL(a);
+    const ub = new URL(b);
+    if (ua.origin !== 'null') return ua.origin === ub.origin;
+    // Opaque origin: origins can't distinguish these, so compare the document
+    // identity (scheme + host + path). This avoids wrongly sweeping a
+    // fragment-changed opaque tab AND avoids grafting across different opaque
+    // pages (which differ in host/path).
+    return ua.protocol === ub.protocol && ua.host === ub.host && ua.pathname === ub.pathname;
   } catch { return false; }
+}
+
+/**
+ * A URL usable for origin corroboration: present and not a generic blank page
+ * (`chrome://newtab/` / `about:blank`). Used by Pass 1, Pass 2b, and the
+ * anchored pass to decide whether an origin check is meaningful.
+ */
+function isUsableUrl(url) {
+  return !!url && url !== 'chrome://newtab/' && url !== 'about:blank';
 }
 
 export class ShadowState {
@@ -906,6 +921,13 @@ export class ShadowState {
     // These are genuinely unmatched — they must be dead-swept, not left to be
     // content-overwritten by the colliding tab while keeping stale lineage.
     const pass1Rejected = new Set();
+    // #9: saved ids that Pass 1 matched to their OWN live id (the tab is still at
+    // its original id). Callers use this to update external id-keyed stores that
+    // reconcile doesn't touch (e.g. workspace membership): an id still refers to
+    // the same tab iff it's remapped in tabIdMap OR present here. Any other
+    // referenced id was closed, or was recycled by a DIFFERENT tab on cold restart
+    // (`this.tabs.has(id)` alone can't tell those apart), and must be dropped.
+    const sameIdMatched = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
     const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
     // F8: accumulate old->new tabId remaps across passes 2/2b/3 so callers
@@ -959,14 +981,21 @@ export class ShadowState {
           const node = this.tabs.get(id);
           const live = liveById.get(id);
           const liveUrl = live.url || live.pendingUrl || '';
+          const usableNodeUrl = isUsableUrl(node.url);
+          const usableLiveUrl = isUsableUrl(liveUrl);
+          const titleOk = node.title && node.title !== 'New Tab' && node.title === live.title;
           const corroborated =
-            (node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank'
-              && node.url === liveUrl) ||
-            (node.title && node.title !== 'New Tab' && node.title === live.title);
+            (usableNodeUrl && node.url === liveUrl) ||              // exact url — strongest
+            // #8: a title match is trusted only when origin is unverifiable (url-less
+            // on either side — the pre-#8 title-only fallback) OR both origins match.
+            // A same-title, cross-origin same-id hit is a coincidental collision, not
+            // the same tab — reject it (falls to pass1Rejected -> dead-sweep, #6).
+            (titleOk && (!usableNodeUrl || !usableLiveUrl || sameOrigin(node.url, liveUrl)));
           accept = corroborated;
         }
         if (accept) {
           matchedLiveIds.add(id);
+          sameIdMatched.add(id);
           pass1Count++;
         } else {
           // Cold-restart id collision with an unrelated tab — record it so the
@@ -1055,7 +1084,7 @@ export class ShadowState {
       // to same-origin candidates. The used candidate is spliced from the SHARED
       // bucket (not this filtered view) so a consumed live tab can't be matched twice.
       const savedUrl = savedNode.url || '';
-      const usableUrl = !!savedUrl && savedUrl !== 'chrome://newtab/' && savedUrl !== 'about:blank';
+      const usableUrl = isUsableUrl(savedUrl);
       // Gate title matches by same-origin ONLY when the saved node has a usable url
       // to compare against. A url-less/generic saved node has no origin to verify, so
       // fall back to the pre-#7 title-only recovery (never worse than before) rather
@@ -1109,7 +1138,7 @@ export class ShadowState {
       const isAnchorCorroborated = (node, live) => {
         const liveUrl = live.url || live.pendingUrl || '';
         const nodeUrl = node.url || '';
-        const usableUrl = !!nodeUrl && nodeUrl !== 'chrome://newtab/' && nodeUrl !== 'about:blank';
+        const usableUrl = isUsableUrl(nodeUrl);
         if (usableUrl && nodeUrl === liveUrl) return true; // exact url — strongest
         const titleOk = !!node.title && node.title !== 'New Tab' && node.title === live.title;
         return titleOk && usableUrl && sameOrigin(nodeUrl, liveUrl);
@@ -1337,7 +1366,7 @@ export class ShadowState {
     };
     console.log('[LinkMap] Reconciliation:', JSON.stringify(stats));
 
-    return { windowIdMap, tabIdMap, stats };
+    return { windowIdMap, tabIdMap, sameIdMatched, stats };
   }
 
   /**

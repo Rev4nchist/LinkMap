@@ -1798,6 +1798,105 @@ describe('reconcileWithLiveTabs — #7: Pass 2b title match must be same-origin'
 });
 
 // ---------------------------------------------------------------------------
+// #8: Pass 1 title corroboration must be same-origin (cold restart)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — coldRestart #8: Pass 1 title corroboration must be same-origin', () => {
+  it('rejects a same-id same-title CROSS-ORIGIN collision instead of content-overwriting lineage', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'https://mail.example/inbox', title: 'Inbox', index: 1 }));
+
+    // Cold restart: id 42 is coincidentally reused by an UNRELATED tab that
+    // happens to share the title "Inbox" but is a different origin.
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://evil.example/inbox', title: 'Inbox', index: 1 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 1, 'only the parent is Pass-1 matched; the cross-origin collision is rejected');
+    const collider = s.getTab(42);
+    assert.ok(collider, 'the unrelated tab exists as its own node');
+    assert.equal(collider.url, 'https://evil.example/inbox');
+    assert.equal(collider.parentId, null, 'the unrelated tab is a root, not grafted under the saved parent');
+    assert.ok(!s.getTab(1).children.includes(42), 'parent has no phantom cross-origin child');
+  });
+
+  it('still accepts a same-id same-origin url change (does not over-refuse)', () => {
+    const s = new ShadowState();
+    s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://mail.example/inbox', title: 'Inbox', index: 0 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://mail.example/inbox?view=unread', title: 'Inbox', index: 0 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 1, 'same-id same-origin url change is corroborated by title + origin');
+    assert.equal(s.getTab(42)?.url, 'https://mail.example/inbox?view=unread');
+  });
+
+  it('still accepts a same-id url-less node by title (no new data loss)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: '', title: 'Loading Doc', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://doc.example/loaded', title: 'Loading Doc', index: 1 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 2, 'url-less node kept by title-only corroboration (origin unverifiable)');
+    assert.ok(s.getTab(1).children.includes(42), 'lineage preserved (not swept)');
+  });
+
+  // Adversarial-review hardening: an opaque-scheme url (file://, chrome://) whose
+  // only change is the fragment is the SAME document — must not be swept.
+  it('accepts a same-id opaque-scheme url whose only change is the fragment (file:// #page)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'file:///C:/report.pdf', title: 'Report', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'file:///C:/report.pdf#page=3', title: 'Report', index: 1 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 2, 'the file:// tab (same document, fragment-only change) is kept, not swept');
+    assert.ok(s.getTab(1).children.includes(42), 'lineage preserved (subtree not detached to root)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #9: sameIdMatched return value (external id-keyed store safety)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — #9: sameIdMatched identifies tabs still at their own id', () => {
+  it('includes Pass-1 matched ids and excludes rejected/recycled ids', () => {
+    const s = new ShadowState();
+    s.addTab(7, makeTab({ tabId: 7, windowId: 100, url: 'https://keep.example/x', title: 'Keep', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://mail.example/inbox', title: 'Inbox', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 7, windowId: 100, url: 'https://keep.example/x', title: 'Keep', index: 0 }),   // corroborated -> Pass 1
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://evil.example/x', title: 'Evil', index: 1 }),   // collision -> rejected + recycled
+    ];
+
+    const { sameIdMatched } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.ok(sameIdMatched instanceof Set, 'sameIdMatched is a Set');
+    assert.ok(sameIdMatched.has(7), 'a Pass-1 matched id is present (still the same tab)');
+    assert.ok(!sameIdMatched.has(42), 'a rejected/recycled id is absent (its id now hosts a different tab)');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tree-integrity hardening (TI-1, TI-2, TI-3)
 // ---------------------------------------------------------------------------
 

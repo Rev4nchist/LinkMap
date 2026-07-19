@@ -98,7 +98,7 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const { windowIdMap, tabIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs, { coldRestart });
+    const { windowIdMap, tabIdMap, sameIdMatched, stats } = context.state.reconcileWithLiveTabs(liveTabs, { coldRestart });
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
@@ -212,9 +212,12 @@ async function init() {
 
       // F8: workspace tabIds are saved membership lists outside the tree —
       // reconcileWithLiveTabs() never touched them. Remap through tabIdMap
-      // (tabs that survived restart under a new id), keep ids that matched
-      // Pass 1 (same id, still live), and drop ids for tabs that never came
-      // back (closed while the browser was shut down).
+      // (tabs that moved to a new id), keep ids in sameIdMatched (still the same
+      // tab at their original id), and drop everything else — a tab that never
+      // came back, OR (#9) an id recycled by a DIFFERENT tab on cold restart.
+      // `context.state.tabs.has(id)` must NOT be used here: after a same-id
+      // collision is swept, an unrelated new tab can occupy the old id, so
+      // has(id) would alias the workspace to the wrong tab.
       let workspacesChanged = false;
       for (const ws of ctx.workspaces) {
         if (!Array.isArray(ws.tabIds) || ws.tabIds.length === 0) continue;
@@ -222,10 +225,10 @@ async function init() {
         for (const id of ws.tabIds) {
           if (tabIdMap.has(id)) {
             remapped.push(tabIdMap.get(id));
-          } else if (context.state.tabs.has(id)) {
+          } else if (sameIdMatched.has(id)) {
             remapped.push(id);
           }
-          // else: tab is gone — drop it
+          // else: tab closed, or its id was recycled by a different tab — drop
         }
         if (remapped.length !== ws.tabIds.length || remapped.some((id, i) => id !== ws.tabIds[i])) {
           workspacesChanged = true;
