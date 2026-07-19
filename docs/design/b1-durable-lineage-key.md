@@ -47,6 +47,16 @@ Both live in the broader reconcile title-matching / gate logic that predates B-1
 - **Same-id collision stranding (Codex #1, ~shadow-state.js Pass-1 gate + dead-sweep):** on cold restart, a saved node whose id coincidentally collides with an unrelated live id is rejected by Pass 1's corroboration but then skipped by every recovery pass AND by dead-sweep (`!liveById.has(id)` is false), so it lingers stale and gets its cosmetic fields overwritten by the unrelated tab while keeping its old lineage. Fix direction: track Pass-1 corroboration-rejects as genuinely unmatched (feed them to Passes 2/2b/anchored/3 and dead-sweep).
 - **Pass 2b cross-origin title graft (Codex #3, ~shadow-state.js Pass 2b):** Pass 2b matches a url-changed child to a same-title live tab with no origin check, so it can graft lineage onto a cross-origin same-title tab. The anchored pass now requires same-origin; Pass 2b does not. Fix direction: extend the same-origin corroboration to Pass 2b.
 
+### Resolution + newly-surfaced follow-ups (2026-07-19, branch `fix/reconcile-cold-restart-integrity`)
+
+Both follow-ups above are now FIXED:
+- **#6** shipped as **sweep-only**, NOT the original gate-widening. A pre-implementation cross-model pre-mortem (Codex) reproduced that re-mapping Pass-1 rejects introduces NEW cold-restart data loss (a reject matching its true reincarnation collides with / starves another saved node, destroying lineage while `tabIdMap` falsely reports success). Sweep-only removes the wrong-graft with no reject re-map; the true reincarnation re-roots (RR-2b-style refuse-by-default).
+- **#7** extends same-origin to Pass 2b, with `sameOrigin` hardened after an as-implemented adversarial review: opaque `chrome://`/`about:`/`data:`/`file:` origins (all stringify to `"null"`) never compare equal, and a url-less saved node falls back to title-only recovery so a lineage-bearing one is not dead-swept.
+
+Newly surfaced by those reviews, **deferred** (pre-existing, distinct from #6/#7):
+- **#8 — Pass 1 title-only cross-origin.** On cold restart, Pass 1's own corroboration accepts a same-id, same-title, DIFFERENT-origin live tab via its title branch, silently content-overwriting the saved node while it keeps lineage — the same wrong-graft class as #6/#7, in untouched Pass 1 code. Fix direction: require same-origin (or url-exact) for Pass 1's title corroboration; let title-only fall through to Pass 2b/anchor (which now gate it).
+- **#9 — no tombstone set for recycled ids.** `reconcileWithLiveTabs` returns no set of REMOVED ids, so a swept `pass1Rejected` id that an unrelated new tab reuses aliases external id-keyed stores (e.g. `background.js` workspace membership: `state.tabs.has(id)` is true again, but for a different tab). Fix direction: return the removed-id set; callers drop those ids from external stores before the `has(id)` "unchanged" check.
+
 ## Why deferred, not bundled with B-2
 
 B-1 couples three independently-risky changes — a schema migration touching every persisted node, a new reconcile pass with subtle correctness properties, and rewriting a test that encodes a safety invariant. Bundled, a reconciliation regression can't be cleanly attributed among them — the exact trap that keeps "standing residuals" standing. It deserves its own branch, review, and migration-focused test pass.
