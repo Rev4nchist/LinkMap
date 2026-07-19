@@ -1853,6 +1853,24 @@ describe('reconcileWithLiveTabs — coldRestart #8: Pass 1 title corroboration m
     assert.equal(stats.pass1, 2, 'url-less node kept by title-only corroboration (origin unverifiable)');
     assert.ok(s.getTab(1).children.includes(42), 'lineage preserved (not swept)');
   });
+
+  // Adversarial-review hardening: an opaque-scheme url (file://, chrome://) whose
+  // only change is the fragment is the SAME document — must not be swept.
+  it('accepts a same-id opaque-scheme url whose only change is the fragment (file:// #page)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'file:///C:/report.pdf', title: 'Report', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'file:///C:/report.pdf#page=3', title: 'Report', index: 1 }),
+    ];
+
+    const { stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 2, 'the file:// tab (same document, fragment-only change) is kept, not swept');
+    assert.ok(s.getTab(1).children.includes(42), 'lineage preserved (subtree not detached to root)');
+  });
 });
 
 // ---------------------------------------------------------------------------

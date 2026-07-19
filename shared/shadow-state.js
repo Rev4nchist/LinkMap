@@ -96,19 +96,25 @@ function pickReconcileCandidate(candidates, savedNode, winMap, useTitle) {
 }
 
 /**
- * True when two URLs share an origin (scheme + host + port). Gates title-only
- * lineage recovery so a same-title but cross-origin tab is never grafted (Pass
- * 2b #7; also the anchored pass). Malformed/empty URLs → false (refuse-by-
- * default). Note: http and https are DIFFERENT origins by spec, so a scheme
- * upgrade reads as cross-origin (re-roots rather than mis-grafts).
+ * True when two URLs are the "same origin" for lineage-recovery corroboration
+ * (Pass 1 #8, Pass 2b #7, anchored pass). Normal schemes compare true origins
+ * (scheme + host + port). Opaque-origin schemes (chrome:, about:, data:, file:)
+ * all report origin "null", so they compare scheme + host + path instead
+ * (ignoring query/fragment): file:///x#a and file:///x#b are the same document
+ * (same tab, fragment change) but chrome://settings and chrome://extensions are
+ * not. Malformed/empty URLs → false (refuse-by-default). http and https are
+ * DIFFERENT origins by spec, so a scheme upgrade reads as cross-origin.
  */
 function sameOrigin(a, b) {
   try {
-    // Opaque-origin schemes (chrome:, about:, data:, file:) all report origin
-    // "null"; treating those as equal would let e.g. chrome://settings match
-    // chrome://extensions. An opaque origin is never same-origin for our purposes.
-    const originA = new URL(a).origin;
-    return originA !== 'null' && originA === new URL(b).origin;
+    const ua = new URL(a);
+    const ub = new URL(b);
+    if (ua.origin !== 'null') return ua.origin === ub.origin;
+    // Opaque origin: origins can't distinguish these, so compare the document
+    // identity (scheme + host + path). This avoids wrongly sweeping a
+    // fragment-changed opaque tab AND avoids grafting across different opaque
+    // pages (which differ in host/path).
+    return ua.protocol === ub.protocol && ua.host === ub.host && ua.pathname === ub.pathname;
   } catch { return false; }
 }
 

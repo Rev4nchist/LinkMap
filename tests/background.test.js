@@ -441,6 +441,37 @@ describe('background.js initialization', () => {
     const stored = chromeMock.storage.local._data.linkmap_workspaces;
     assert.deepEqual(stored.workspaces[0].tabIds, [], 'recycled id dropped, not aliased to the unrelated tab');
   });
+
+  it('#9: keeps a workspace member whose tab survived reconcile at its own id (sameIdMatched keep path)', async () => {
+    const savedState = {
+      version: 1,
+      tabs: {
+        7: { tabId: 7, parentId: null, children: [], title: 'GitHub', url: 'https://github.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+      },
+      rootIds: [7],
+      collapsed: [],
+      groupColors: {},
+      theme: 'dracula',
+    };
+
+    chromeMock.storage.local._data.linkmap_workspaces = {
+      workspaces: [{ id: 'w1', name: 'Work', tabIds: [7] }],
+      activeWorkspaceId: 'w1',
+    };
+
+    // Cold restart, but tab 7 kept its id AND corroborates (same url) -> Pass 1
+    // match -> present in sameIdMatched, not tabIdMap. The consumer must keep it.
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 7, active: true })];
+      return [makeChromeTab({ id: 7, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, savedState);
+
+    const stored = chromeMock.storage.local._data.linkmap_workspaces;
+    assert.deepEqual(stored.workspaces[0].tabIds, [7], 'surviving same-id tab kept in the workspace');
+  });
 });
 
 // ---------------------------------------------------------------------------
