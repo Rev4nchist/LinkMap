@@ -824,8 +824,17 @@ export class ShadowState {
    * After matching, dead tabs are removed and orphaned children are re-rooted.
    *
    * @param {Object[]} liveTabs - Array from chrome.tabs.query({}).
+   * @param {Object} [opts]
+   * @param {boolean} [opts.coldRestart=false] - True when this reconcile
+   *   follows a genuine browser cold restart (Chrome reassigns tab ids),
+   *   as opposed to a routine service-worker suspend/wake (ids still
+   *   valid). When true, Pass 1's same-id match requires URL/title
+   *   corroboration — otherwise a coincidental id collision with an
+   *   unrelated tab would graft it into the tree and cast a phantom vote
+   *   in the windowId map. Defaults to false, which preserves today's
+   *   unconditional same-id match (warm-wake behavior, byte-identical).
    */
-  reconcileWithLiveTabs(liveTabs) {
+  reconcileWithLiveTabs(liveTabs, { coldRestart = false } = {}) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
     const matchedLiveIds = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
@@ -867,11 +876,30 @@ export class ShadowState {
       return map;
     };
 
-    // Pass 1: Match by tabId (same session)
+    // Pass 1: Match by tabId (same session). On a cold browser restart,
+    // Chrome reassigns tab ids, so a same-id "hit" may be a coincidental
+    // collision with an unrelated live tab rather than a genuine match —
+    // require URL/title corroboration in that case. A saved node that
+    // fails corroboration falls through to Passes 2/2b/3, which already
+    // do corroborated matching, instead of being grafted onto the wrong
+    // live tab. Warm wake (default) keeps the unconditional same-id match.
     for (const id of this.tabs.keys()) {
       if (liveById.has(id)) {
-        matchedLiveIds.add(id);
-        pass1Count++;
+        let accept = true;
+        if (coldRestart) {
+          const node = this.tabs.get(id);
+          const live = liveById.get(id);
+          const liveUrl = live.url || live.pendingUrl || '';
+          const corroborated =
+            (node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank'
+              && node.url === liveUrl) ||
+            (node.title && node.title !== 'New Tab' && node.title === live.title);
+          accept = corroborated;
+        }
+        if (accept) {
+          matchedLiveIds.add(id);
+          pass1Count++;
+        }
       }
     }
 
@@ -1025,6 +1053,12 @@ export class ShadowState {
     // Build oldWindowId → newWindowId map from matched tabs (for group rescue)
     const windowIdVotes = new Map(); // oldWid → Map<newWid, count>
     for (const liveTab of liveTabs) {
+      // Only genuinely matched live tabs may vote — otherwise an unmatched
+      // (coincidental-id-collision) live tab that merely shares a saved
+      // windowId snapshot entry could poison the windowId map. No-op on
+      // warm wake, where every id with a savedTabWindowIds entry is
+      // already in matchedLiveIds.
+      if (!matchedLiveIds.has(liveTab.id)) continue;
       const savedWid = savedTabWindowIds.get(liveTab.id);
       if (savedWid !== undefined && savedWid !== liveTab.windowId) {
         if (!windowIdVotes.has(savedWid)) windowIdVotes.set(savedWid, new Map());

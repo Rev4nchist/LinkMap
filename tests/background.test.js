@@ -1,5 +1,7 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { SW_SESSION_KEY } from '../shared/constants.js';
+import { ShadowState } from '../shared/shadow-state.js';
 
 // ---------------------------------------------------------------------------
 // Chrome API Mock
@@ -24,6 +26,10 @@ function createChromeMock() {
   }
 
   const storedData = {};
+  // Default: warm SW-wake (marker already present) — preserves today's
+  // behavior for every test that doesn't explicitly simulate a cold
+  // restart. A cold-restart test clears this before loadBackground().
+  const sessionData = { [SW_SESSION_KEY]: { bootTs: 0 } };
 
   let nextTabId = 1000;
   let nextWindowId = 100;
@@ -82,6 +88,18 @@ function createChromeMock() {
           Object.assign(storedData, obj);
         }),
         _data: storedData,
+      },
+      session: {
+        get: mock.fn(async (key) => {
+          if (typeof key === 'string') {
+            return { [key]: sessionData[key] };
+          }
+          return { ...sessionData };
+        }),
+        set: mock.fn(async (obj) => {
+          Object.assign(sessionData, obj);
+        }),
+        _data: sessionData,
       },
     },
     runtime: {
@@ -318,6 +336,46 @@ describe('background.js initialization', () => {
     // Only loadBackground's own ~50ms settle wait has elapsed — well under
     // the 500ms save debounce. An immediate save must already be persisted.
     assert.ok(chromeMock.storage.local._data.linkmap_state, 'state persisted immediately after init, before the debounce would have fired');
+  });
+
+  it('B-2/F9: computes coldRestart:true from an empty chrome.storage.session and threads it into reconcile', async () => {
+    // Simulate a genuine cold restart: no prior SW-session marker.
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    const reconcileSpy = mock.method(ShadowState.prototype, 'reconcileWithLiveTabs');
+    try {
+      await loadBackground(chromeMock);
+      assert.ok(reconcileSpy.mock.callCount() >= 1, 'reconcileWithLiveTabs was called');
+      const [, opts] = reconcileSpy.mock.calls[0].arguments;
+      assert.equal(opts?.coldRestart, true, 'coldRestart computed true from an empty session marker');
+    } finally {
+      mock.restoreAll();
+    }
+
+    // The marker must be set so the NEXT SW-wake sees warm.
+    assert.ok(chromeMock.storage.session._data[SW_SESSION_KEY], 'SW session marker was set after init');
+  });
+
+  it('B-2/F9: computes coldRestart:false from a populated chrome.storage.session (warm SW-wake)', async () => {
+    // beforeEach's fresh chromeMock already defaults to a populated marker.
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 1, active: true })];
+      return [makeChromeTab({ id: 1 })];
+    });
+
+    const reconcileSpy = mock.method(ShadowState.prototype, 'reconcileWithLiveTabs');
+    try {
+      await loadBackground(chromeMock);
+      assert.ok(reconcileSpy.mock.callCount() >= 1, 'reconcileWithLiveTabs was called');
+      const [, opts] = reconcileSpy.mock.calls[0].arguments;
+      assert.equal(opts?.coldRestart, false, 'coldRestart computed false when the SW session marker is already present');
+    } finally {
+      mock.restoreAll();
+    }
   });
 
   it('F8: remaps workspace tabIds through the reconcile tabIdMap and drops closed tabs', async () => {

@@ -7,7 +7,7 @@
  */
 
 import { ShadowState } from './shared/shadow-state.js';
-import { MSG, STORAGE_KEY, SETTINGS_KEY, WORKSPACES_KEY, TAB_NOTES_KEY } from './shared/constants.js';
+import { MSG, STORAGE_KEY, SETTINGS_KEY, WORKSPACES_KEY, TAB_NOTES_KEY, SW_SESSION_KEY } from './shared/constants.js';
 import { createContext, reconcileRetryGroups } from './background/context.js';
 import { createAutoGrouper } from './background/auto-group.js';
 import { createSessionManager } from './background/sessions.js';
@@ -62,6 +62,15 @@ async function init() {
   // saved snapshot, regardless of how far the try block got before failing.
   let savedData;
   try {
+    // 0. Restart-detection: chrome.storage.session is in-memory and is
+    // CLEARED on a full browser restart (and on extension reload/update),
+    // but SURVIVES service-worker suspend/wake — exactly the boundary where
+    // Chrome reassigns tab ids. Read it before any other await so no
+    // buffered tab event can race the check (MV3 guarantees a single SW).
+    const sessResult = await chrome.storage.session.get(SW_SESSION_KEY);
+    const coldRestart = !sessResult[SW_SESSION_KEY];
+    await chrome.storage.session.set({ [SW_SESSION_KEY]: { bootTs: Date.now() } });
+
     // 1. Load saved state
     const result = await chrome.storage.local.get(STORAGE_KEY);
     savedData = result[STORAGE_KEY];
@@ -89,7 +98,7 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const { windowIdMap, tabIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
+    const { windowIdMap, tabIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs, { coldRestart });
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
@@ -101,7 +110,7 @@ async function init() {
         try {
           const retryLiveTabs = await chrome.tabs.query({});
           const retryState = ShadowState.fromStorage(savedData);
-          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs);
+          const { windowIdMap: retryWindowIdMap, stats: retryStats } = retryState.reconcileWithLiveTabs(retryLiveTabs, { coldRestart });
 
           // Only swap if retry preserved MORE relationships
           if (retryStats.survivingRelationships > stats.survivingRelationships) {

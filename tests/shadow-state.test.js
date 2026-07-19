@@ -1309,6 +1309,70 @@ describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () =>
 });
 
 // ---------------------------------------------------------------------------
+// B-2/F9: coldRestart — Pass 1 corroboration + windowId vote gating
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — coldRestart: Pass 1 requires corroboration', () => {
+  it('does not graft a coincidental id collision into the tree or poison the windowId map', () => {
+    const s = new ShadowState();
+    // Saved node: id 42, window 100, distinct url/title.
+    s.addTab(42, makeTab({
+      tabId: 42, windowId: 100, url: 'https://mail.example/inbox',
+      title: 'Inbox', index: 0,
+    }));
+    // A genuinely-matched anchor tab so the windowId vote machinery has a
+    // real match to compare against (and to prove real votes still work).
+    s.addTab(7, makeTab({
+      tabId: 7, windowId: 100, url: 'https://mail.example/anchor',
+      title: 'Anchor', index: 1,
+    }));
+
+    // Cold restart: Chrome reassigned ids. A totally unrelated live tab
+    // now happens to hold id 42 in a DIFFERENT window, with unrelated
+    // content (no url/title corroboration). The genuine anchor tab is
+    // matched at a new id (107) in the same new window (500) via Pass 2
+    // URL fingerprinting.
+    const liveTabs = [
+      makeLiveTab({ id: 42, windowId: 999, url: 'https://unrelated.example/x', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 107, windowId: 500, url: 'https://mail.example/anchor', title: 'Anchor', index: 1 }),
+    ];
+
+    const { windowIdMap, stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(stats.pass1, 0, 'coincidental id collision is not accepted by Pass 1 without corroboration');
+    assert.notEqual(windowIdMap.get(100), 999, 'coincidental collision does not poison the windowId map');
+    assert.equal(windowIdMap.get(100), 500, 'genuine match still produces the correct windowId vote');
+  });
+});
+
+describe('reconcileWithLiveTabs — coldRestart: default (warm wake) is unchanged', () => {
+  it('matches by id unconditionally when coldRestart is not passed (regression lock)', () => {
+    const s = new ShadowState();
+    s.addTab(42, makeTab({
+      tabId: 42, windowId: 100, url: 'https://mail.example/inbox',
+      title: 'Inbox', index: 0,
+    }));
+    s.addTab(7, makeTab({
+      tabId: 7, windowId: 100, url: 'https://mail.example/anchor',
+      title: 'Anchor', index: 1,
+    }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 42, windowId: 999, url: 'https://unrelated.example/x', title: 'Unrelated', index: 0 }),
+      makeLiveTab({ id: 107, windowId: 500, url: 'https://mail.example/anchor', title: 'Anchor', index: 1 }),
+    ];
+
+    // No second argument — must match today's unconditional same-id Pass 1
+    // match, including the (unrelated-but-still-current) vote outcome from
+    // the id-42 collision. This is the byte-identical-on-warm-wake lock.
+    const { windowIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(stats.pass1, 1, 'default flag preserves unconditional same-id Pass 1 match');
+    assert.equal(windowIdMap.get(100), 999, 'default flag preserves the unguarded vote outcome (regression lock)');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tree-integrity hardening (TI-1, TI-2, TI-3)
 // ---------------------------------------------------------------------------
 

@@ -87,6 +87,12 @@ export const MSG = {
 export const STORAGE_KEY = 'linkmap_state';
 export const STORAGE_VERSION = 1;
 
+// chrome.storage.session marker used to distinguish a genuine cold browser
+// restart (tab ids reassigned; storage.session cleared) from a routine
+// service-worker suspend/wake (storage.session survives; tab ids still
+// valid). See background.js init() and ShadowState#reconcileWithLiveTabs.
+export const SW_SESSION_KEY = 'linkmap_sw_session';
+
 // Themes — August Suite (10) + Cyberpunk Suite (5)
 export const THEMES = [
   'august-default', 'midnight-mars', 'deep-forest', 'oceanic-depth',
