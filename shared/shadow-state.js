@@ -959,10 +959,16 @@ export class ShadowState {
           const node = this.tabs.get(id);
           const live = liveById.get(id);
           const liveUrl = live.url || live.pendingUrl || '';
+          const usableNodeUrl = node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank';
+          const usableLiveUrl = liveUrl && liveUrl !== 'chrome://newtab/' && liveUrl !== 'about:blank';
+          const titleOk = node.title && node.title !== 'New Tab' && node.title === live.title;
           const corroborated =
-            (node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank'
-              && node.url === liveUrl) ||
-            (node.title && node.title !== 'New Tab' && node.title === live.title);
+            (usableNodeUrl && node.url === liveUrl) ||              // exact url — strongest
+            // #8: a title match is trusted only when origin is unverifiable (url-less
+            // on either side — the pre-#8 title-only fallback) OR both origins match.
+            // A same-title, cross-origin same-id hit is a coincidental collision, not
+            // the same tab — reject it (falls to pass1Rejected -> dead-sweep, #6).
+            (titleOk && (!usableNodeUrl || !usableLiveUrl || sameOrigin(node.url, liveUrl)));
           accept = corroborated;
         }
         if (accept) {
