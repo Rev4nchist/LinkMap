@@ -103,7 +103,13 @@ function pickReconcileCandidate(candidates, savedNode, winMap, useTitle) {
  * upgrade reads as cross-origin (re-roots rather than mis-grafts).
  */
 function sameOrigin(a, b) {
-  try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
+  try {
+    // Opaque-origin schemes (chrome:, about:, data:, file:) all report origin
+    // "null"; treating those as equal would let e.g. chrome://settings match
+    // chrome://extensions. An opaque origin is never same-origin for our purposes.
+    const originA = new URL(a).origin;
+    return originA !== 'null' && originA === new URL(b).origin;
+  } catch { return false; }
 }
 
 export class ShadowState {
@@ -1049,7 +1055,15 @@ export class ShadowState {
       // to same-origin candidates. The used candidate is spliced from the SHARED
       // bucket (not this filtered view) so a consumed live tab can't be matched twice.
       const savedUrl = savedNode.url || '';
-      const originOk = bucket.filter((c) => sameOrigin(savedUrl, c.url || c.pendingUrl || ''));
+      const usableUrl = !!savedUrl && savedUrl !== 'chrome://newtab/' && savedUrl !== 'about:blank';
+      // Gate title matches by same-origin ONLY when the saved node has a usable url
+      // to compare against. A url-less/generic saved node has no origin to verify, so
+      // fall back to the pre-#7 title-only recovery (never worse than before) rather
+      // than becoming permanently unrecoverable and dead-swept (which would drop a
+      // lineage-bearing node's subtree, since Pass 3 refuses lineage-bearing nodes).
+      const originOk = usableUrl
+        ? bucket.filter((c) => sameOrigin(savedUrl, c.url || c.pendingUrl || ''))
+        : bucket;
       if (originOk.length === 0) continue;
 
       const best = pickReconcileCandidate(originOk, savedNode, winMapP2b, false);

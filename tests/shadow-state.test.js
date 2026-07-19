@@ -1758,6 +1758,43 @@ describe('reconcileWithLiveTabs — #7: Pass 2b title match must be same-origin'
     assert.equal(tabIdMap.get(200), 502, 'same-origin path change recovered via Pass 2b');
     assert.equal(stats.pass2b, 1, 'Pass 2b fired for the same-origin title match');
   });
+
+  // Adversarial-review hardening: opaque origins ("null") must not compare equal.
+  it('does not graft between different chrome:// pages sharing a title (opaque-origin)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: 'chrome://settings/', title: 'Shared Internal', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'chrome://extensions/', title: 'Shared Internal', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.ok(!tabIdMap.has(200), 'chrome://settings child is NOT grafted onto chrome://extensions');
+    assert.equal(stats.pass2b, 0, 'Pass 2b refused the opaque-origin title match');
+    assert.equal(s.getTab(502)?.parentId, null, 'the other internal page is a root, not grafted under the parent');
+  });
+
+  // Adversarial-review hardening: a url-less saved node has no origin to verify —
+  // it must keep the pre-#7 title-only recovery rather than lose its lineage.
+  it('recovers a url-less titled node by title instead of dead-sweeping its lineage', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: '', title: 'Loading Doc', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://doc.example/loaded', title: 'Loading Doc', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(tabIdMap.get(200), 502, 'url-less node recovered via Pass 2b title fallback');
+    assert.equal(stats.pass2b, 1, 'Pass 2b matched the url-less node by title');
+    assert.ok(s.getTab(1).children.includes(502), 'recovered node stays a child of the parent (lineage preserved)');
+  });
 });
 
 // ---------------------------------------------------------------------------
