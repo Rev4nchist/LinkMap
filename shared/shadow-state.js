@@ -95,6 +95,23 @@ function pickReconcileCandidate(candidates, savedNode, winMap, useTitle) {
   return null;
 }
 
+/**
+ * True when two URLs share an origin (scheme + host + port). Gates title-only
+ * lineage recovery so a same-title but cross-origin tab is never grafted (Pass
+ * 2b #7; also the anchored pass). Malformed/empty URLs → false (refuse-by-
+ * default). Note: http and https are DIFFERENT origins by spec, so a scheme
+ * upgrade reads as cross-origin (re-roots rather than mis-grafts).
+ */
+function sameOrigin(a, b) {
+  try {
+    // Opaque-origin schemes (chrome:, about:, data:, file:) all report origin
+    // "null"; treating those as equal would let e.g. chrome://settings match
+    // chrome://extensions. An opaque origin is never same-origin for our purposes.
+    const originA = new URL(a).origin;
+    return originA !== 'null' && originA === new URL(b).origin;
+  } catch { return false; }
+}
+
 export class ShadowState {
   constructor() {
     /** @type {Map<number, Object>} tabId -> TabNode */
@@ -884,6 +901,11 @@ export class ShadowState {
   reconcileWithLiveTabs(liveTabs, { coldRestart = false } = {}) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
     const matchedLiveIds = new Set();
+    // #6: saved ids that Pass 1 rejected on cold restart because their id
+    // coincidentally collides with an UNRELATED live tab (corroboration failed).
+    // These are genuinely unmatched — they must be dead-swept, not left to be
+    // content-overwritten by the colliding tab while keeping stale lineage.
+    const pass1Rejected = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
     const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
     // F8: accumulate old->new tabId remaps across passes 2/2b/3 so callers
@@ -946,6 +968,10 @@ export class ShadowState {
         if (accept) {
           matchedLiveIds.add(id);
           pass1Count++;
+        } else {
+          // Cold-restart id collision with an unrelated tab — record it so the
+          // dead-sweep removes this stranded node (#6).
+          pass1Rejected.add(id);
         }
       }
     }
@@ -1020,10 +1046,27 @@ export class ShadowState {
     for (const [savedId, savedNode] of unmatchedSavedP2b) {
       const title = savedNode.title || '';
       if (!title || title === 'New Tab') continue;
-      const candidates = liveByTitle.get(title);
-      if (!candidates || candidates.length === 0) continue;
+      const bucket = liveByTitle.get(title);
+      if (!bucket || bucket.length === 0) continue;
 
-      const best = pickReconcileCandidate(candidates, savedNode, winMapP2b, false);
+      // #7: a title-only match must be SAME-ORIGIN. A url-changed tab (SPA/redirect)
+      // keeps its origin; a same-title tab on a different origin is an unrelated
+      // graft (Codex #3). Mirror the anchored pass's discipline: narrow the bucket
+      // to same-origin candidates. The used candidate is spliced from the SHARED
+      // bucket (not this filtered view) so a consumed live tab can't be matched twice.
+      const savedUrl = savedNode.url || '';
+      const usableUrl = !!savedUrl && savedUrl !== 'chrome://newtab/' && savedUrl !== 'about:blank';
+      // Gate title matches by same-origin ONLY when the saved node has a usable url
+      // to compare against. A url-less/generic saved node has no origin to verify, so
+      // fall back to the pre-#7 title-only recovery (never worse than before) rather
+      // than becoming permanently unrecoverable and dead-swept (which would drop a
+      // lineage-bearing node's subtree, since Pass 3 refuses lineage-bearing nodes).
+      const originOk = usableUrl
+        ? bucket.filter((c) => sameOrigin(savedUrl, c.url || c.pendingUrl || ''))
+        : bucket;
+      if (originOk.length === 0) continue;
+
+      const best = pickReconcileCandidate(originOk, savedNode, winMapP2b, false);
       if (!best) continue;
 
       this.replaceTabId(savedId, best.id);
@@ -1032,8 +1075,8 @@ export class ShadowState {
       pass2bCount++;
       const oldWid2b = savedTabWindowIds.get(savedId);
       if (oldWid2b !== undefined) savedTabWindowIds.set(best.id, oldWid2b);
-      const idx = candidates.indexOf(best);
-      if (idx !== -1) candidates.splice(idx, 1);
+      const idx = bucket.indexOf(best);
+      if (idx !== -1) bucket.splice(idx, 1);
     }
 
     // Anchored re-association pass (B-1): only on a genuine cold restart.
@@ -1052,9 +1095,6 @@ export class ShadowState {
     // own children within the same pass.
     let passAnchorCount = 0;
     if (coldRestart) {
-      const sameOrigin = (a, b) => {
-        try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
-      };
       // Anchored matches require EXACT url corroboration, OR — for a tab whose
       // url changed across restart (SPA/redirect) but whose title survived — a
       // title match backed by SAME-ORIGIN evidence. Title-ALONE (cross-origin)
@@ -1170,7 +1210,14 @@ export class ShadowState {
     // (a) Remove dead tabs (saved tabs with no live match).
     const deadIds = [];
     for (const id of this.tabs.keys()) {
-      if (!liveById.has(id)) deadIds.push(id);
+      // A saved tab with no live counterpart is dead. #6: a Pass-1 reject
+      // (still-unmatched) is ALSO dead — its id belongs to an unrelated live tab
+      // now, so `!liveById.has(id)` is false, yet the saved node is stranded. It
+      // is never re-mapped (recovery gates keep the `!liveById.has(id)` proxy), so
+      // sweeping it here can never strand a node another pass legitimately claimed.
+      if (!liveById.has(id) || (pass1Rejected.has(id) && !matchedLiveIds.has(id))) {
+        deadIds.push(id);
+      }
     }
     for (const id of deadIds) {
       this.removeTab(id);

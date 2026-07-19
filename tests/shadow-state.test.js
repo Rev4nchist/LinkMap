@@ -1212,8 +1212,8 @@ describe('reconcileWithLiveTabs — return value includes stats', () => {
     s.addTab(1, makeTab({ tabId: 1, url: 'https://same.com' }));
     // Pass 2: URL-matched, remapped 100 -> 501.
     s.addTab(100, makeTab({ tabId: 100, url: 'https://github.com', title: 'GitHub' }));
-    // Pass 2b: title-matched (URL changed), remapped 200 -> 502.
-    s.addTab(200, makeTab({ tabId: 200, url: 'https://stale.example', title: 'Docs' }));
+    // Pass 2b: title-matched (URL changed within the SAME origin), remapped 200 -> 502.
+    s.addTab(200, makeTab({ tabId: 200, url: 'https://docs.example/old', title: 'Docs' }));
 
     const liveTabs = [
       makeLiveTab({ id: 1, url: 'https://same.com', index: 0 }),
@@ -1595,6 +1595,205 @@ describe('reconcileWithLiveTabs — coldRestart: default (warm wake) is unchange
 
     assert.equal(stats.pass1, 1, 'default flag preserves unconditional same-id Pass 1 match');
     assert.equal(windowIdMap.get(100), 999, 'default flag preserves the unguarded vote outcome (regression lock)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6: cold-restart same-id collision stranding (sweep-only fix)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — coldRestart #6: same-id collision must not wrong-graft', () => {
+  it('sweeps the stranded child instead of grafting the unrelated tab under the parent (reincarnation present)', () => {
+    const s = new ShadowState();
+    // Saved parent + child. On cold restart Chrome reassigns ids, so the child's
+    // saved id (42) coincidentally collides with an UNRELATED live tab; the child's
+    // true reincarnation comes up under a different id (102).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://unrelated.example/x', title: 'Unrelated', index: 2 }),
+      makeLiveTab({ id: 102, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    const unrelated = s.getTab(42);
+    assert.ok(unrelated, 'the unrelated live tab exists as a node');
+    assert.equal(unrelated.url, 'https://unrelated.example/x');
+    assert.equal(unrelated.parentId, null, 'the unrelated tab is a ROOT, never grafted under the saved parent');
+
+    const parent = s.getTab(1);
+    assert.ok(parent, 'parent survived');
+    const childUrls = parent.children.map((cid) => s.getTab(cid)?.url);
+    assert.ok(!childUrls.includes('https://unrelated.example/x'), 'no wrong-graft: unrelated content is not a child of the parent');
+
+    const trueChild = s.getTab(102);
+    assert.ok(trueChild && trueChild.url === 'https://child.example/page', 'true child recovered as a node (re-rooted)');
+  });
+
+  it('sweeps the stranded child when its reincarnation is absent', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://unrelated.example/x', title: 'Unrelated', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    const parent = s.getTab(1);
+    assert.equal(parent.children.length, 0, 'parent has no phantom child after the stranded child is swept');
+    assert.equal(s.getTab(42).parentId, null, 'the unrelated tab is a clean root');
+    assert.equal(s.getTab(42).url, 'https://unrelated.example/x');
+  });
+
+  // Regression locks: these pass on sweep-only and would go RED if #6 were ever
+  // changed to re-map rejected nodes (the reproduced Q4/Q5b data-loss paths).
+  it('does not starve a genuinely-unmatched node when another saved node is id-collided (Q4 lock)', () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      const s = new ShadowState();
+      // A (id 42) collides with an unrelated live tab; A shares url/title with B.
+      s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 0 }));
+      // B (id 1000): no live tab has this id — genuinely unmatched, must recover.
+      s.addTab(1000, makeTab({ tabId: 1000, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 5 }));
+
+      const liveTabs = [
+        makeLiveTab({ id: 42, windowId: 999, url: 'https://random.example/x', title: 'Random', index: 0 }),
+        makeLiveTab({ id: 555, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 1 }),
+      ];
+
+      const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+      assert.equal(tabIdMap.get(1000), 555, 'genuine node B recovered onto its live candidate (never starved)');
+      assert.ok(!tabIdMap.has(42), 'the id-collided rejected node A is never remapped (sweep-only)');
+      assert.ok(!warnings.some((w) => w.includes('replaceTabId collision')), 'no destructive replaceTabId collision');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('does not destroy lineage when two saved nodes collide on cold-restart ids (Q5b lock)', () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      const s = new ShadowState();
+      // Grandparent with a pinned child C (saved id 1000).
+      s.addTab(9, makeTab({ tabId: 9, windowId: 100, url: 'https://gp.example/home', title: 'GP', index: 0 }));
+      s.addTab(1000, makeTab({ tabId: 1000, parentId: 9, pinned: true, windowId: 100, url: 'https://c-true.example/y', title: 'C-True', index: 1 }));
+      // A (saved id 42) collides with an unrelated live tab; A's TRUE reincarnation is
+      // live id 1000 — coincidentally the same id C is saved under.
+      s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://a-true.example/x', title: 'A-True', index: 2 }));
+
+      const liveTabs = [
+        makeLiveTab({ id: 9, windowId: 100, url: 'https://gp.example/home', title: 'GP', index: 0 }),
+        makeLiveTab({ id: 42, windowId: 999, url: 'https://random.example/z', title: 'Random', index: 0 }),
+        makeLiveTab({ id: 1000, windowId: 100, url: 'https://a-true.example/x', title: 'A-True', index: 1 }),
+        makeLiveTab({ id: 2000, windowId: 100, url: 'https://c-true.example/y', title: 'C-True', index: 2 }),
+      ];
+
+      const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+      assert.ok(!warnings.some((w) => w.includes('replaceTabId collision')), 'no destructive replaceTabId collision guard fired');
+      for (const [, node] of s.tabs) {
+        if (node.parentId != null) {
+          assert.ok(s.tabs.has(node.parentId), 'no dangling parentId (no corrupted lineage)');
+        }
+      }
+      assert.ok(tabIdMap.get(1000) !== 2000, 'no false lineage-losing remap recorded for C');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #7: Pass 2b title match must be same-origin
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — #7: Pass 2b title match must be same-origin', () => {
+  it('does not graft a url-changed CHILD onto a same-title CROSS-ORIGIN live tab', () => {
+    const s = new ShadowState();
+    // Parent + child. The child's url changed since save; a live tab shares the
+    // child's TITLE but is a different origin. Pass 2b must refuse — grafting the
+    // child's lineage onto a cross-origin tab is the bug (Codex #3). A lineage-
+    // bearing node is refused by Pass 3 too (RR-2b), so it falls to dead-sweep.
+    // (A lineage-FREE leaf is intentionally still recoverable by Pass 3 positional
+    // matching — that carries no lineage, so it is out of scope for #7.)
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: 'https://docs.example/report-draft', title: 'Report', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://evil.example/report', title: 'Report', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.ok(!tabIdMap.has(200), 'the child is NOT remapped onto the cross-origin live tab');
+    assert.equal(stats.pass2b, 0, 'Pass 2b did not fire for the cross-origin title match');
+    const crossOrigin = s.getTab(502);
+    assert.ok(crossOrigin, 'the cross-origin live tab exists as its own node');
+    assert.equal(crossOrigin.parentId, null, 'cross-origin tab is a root, not grafted under the saved parent');
+    assert.equal(crossOrigin.url, 'https://evil.example/report');
+  });
+
+  it('still matches a same-origin different-path url change (SPA/redirect recovery not over-refused)', () => {
+    const s = new ShadowState();
+    s.addTab(200, makeTab({ tabId: 200, windowId: 1, url: 'https://app.example/old', title: 'Inbox', index: 0 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://app.example/new', title: 'Inbox', index: 0 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.equal(tabIdMap.get(200), 502, 'same-origin path change recovered via Pass 2b');
+    assert.equal(stats.pass2b, 1, 'Pass 2b fired for the same-origin title match');
+  });
+
+  // Adversarial-review hardening: opaque origins ("null") must not compare equal.
+  it('does not graft between different chrome:// pages sharing a title (opaque-origin)', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: 'chrome://settings/', title: 'Shared Internal', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'chrome://extensions/', title: 'Shared Internal', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs);
+
+    assert.ok(!tabIdMap.has(200), 'chrome://settings child is NOT grafted onto chrome://extensions');
+    assert.equal(stats.pass2b, 0, 'Pass 2b refused the opaque-origin title match');
+    assert.equal(s.getTab(502)?.parentId, null, 'the other internal page is a root, not grafted under the parent');
+  });
+
+  // Adversarial-review hardening: a url-less saved node has no origin to verify —
+  // it must keep the pre-#7 title-only recovery rather than lose its lineage.
+  it('recovers a url-less titled node by title instead of dead-sweeping its lineage', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(200, makeTab({ tabId: 200, parentId: 1, windowId: 1, url: '', title: 'Loading Doc', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 1, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 502, windowId: 1, url: 'https://doc.example/loaded', title: 'Loading Doc', index: 1 }),
+    ];
+
+    const { tabIdMap, stats } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(tabIdMap.get(200), 502, 'url-less node recovered via Pass 2b title fallback');
+    assert.equal(stats.pass2b, 1, 'Pass 2b matched the url-less node by title');
+    assert.ok(s.getTab(1).children.includes(502), 'recovered node stays a child of the parent (lineage preserved)');
   });
 });
 
