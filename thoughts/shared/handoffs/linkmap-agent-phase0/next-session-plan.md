@@ -16,20 +16,22 @@ authoritative_agent_plan: C:\Users\david.hayes\.claude\plans\deep-skipping-stear
 spike_ledger: docs/agent-integration/DESIGN-RESEARCH.md
 ```
 
-## EXECUTION STATUS (session 3, 2026-07-18) — 10/11 DONE
+## EXECUTION STATUS (session 3, 2026-07-18→19) — 11/11 DONE, MERGED
 
-Branch `fix/stability-queue` @ `ac4f580`, **500/500 green** (474 → 500, +26 tests). Not yet pushed / no PR.
+Stability queue **CLOSED**. `master` @ `5767d74`, **509/509 green** (474 → 509, +35 tests). Two PRs merged.
 
 | Wave | Items | Commit | Status |
 |------|-------|--------|--------|
-| A | CR-move2group-unpin, CR-recovery-save, CR-move-pinned, CR-context-persist, CR-favicon-map | `467fcf8` | ✅ done (484 green) |
-| B | A-2, F8, F7, A-7 | `2ee343c`, `17734ab` | ✅ done (496 green) |
-| C | B-2/F9 (+ restart-detection primitive) | `ac4f580` | ✅ done (500 green) |
-| C | **B-1** | — | ⏸ **DEFERRED** — design `docs/design/b1-durable-lineage-key.md` |
+| A | CR-move2group-unpin, CR-recovery-save, CR-move-pinned, CR-context-persist, CR-favicon-map | `467fcf8` | ✅ PR #9 merged (`f5352aa`) |
+| B | A-2, F8, F7, A-7 | `2ee343c`, `17734ab` | ✅ PR #9 merged |
+| C | B-2/F9 (+ restart-detection primitive) | `ac4f580` | ✅ PR #9 merged |
+| C | **B-1** durable lineage key + anchored re-association | `e595398`, `ed14bbd` | ✅ **PR #10 merged** (`5767d74`) — Codex-adversarial-hardened |
 
-**Orchestration notes for next session:** worktree-isolated workflow agents branch from **master, not the current feature branch** — cherry-pick their deltas onto the branch, don't copy shared files (memory `feedback_workflow_worktree_branches_from_master`). For a single-cluster wave touching files earlier waves already changed, run one agent DIRECTLY on the branch (no worktree) to avoid the merge dance.
+**Two pre-existing reconcile follow-ups** (surfaced by B-1's adversarial review, NOT regressions — see `docs/design/b1-durable-lineage-key.md`): Codex #1 cold-restart same-id collision stranding; Codex #3 Pass 2b cross-origin title graft.
 
-**Remaining next-fork:** (A) push branch + open PR; (B) Track B agent spikes 4-9 (rigs `echo-mcp.mjs`/`ws-probe-server.mjs` need recreating — ephemeral scratchpad wiped); (C) agent Phase 1; (D) deferred B-1.
+**Orchestration lessons (see project memory):** (1) worktree-isolated workflow agents branch from **master, not the current feature branch** — cherry-pick deltas, don't copy shared files. (2) For a single-cluster wave touching files earlier waves changed, run one agent DIRECTLY on the branch (no worktree). (3) **Always run a cross-model adversarial review on risky/durable changes** — Codex caught two wrong-graft paths in B-1 that self-review missed; harden before merge, and distinguish new findings from pre-existing ones.
+
+**Remaining next-fork:** (A) Track B agent spikes 4-9 (rigs `echo-mcp.mjs`/`ws-probe-server.mjs` need recreating — ephemeral scratchpad wiped); (B) agent Phase 1 spine (elephant-2 cleared); (C) the two pre-existing reconcile follow-ups (#1/#3); (D) theming engine.
 
 ## Verified queue (all OPEN on master, re-anchored — snapshot before execution)
 

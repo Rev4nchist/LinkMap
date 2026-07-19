@@ -1,15 +1,17 @@
 # Project Roadmap
 
 ## Current Focus
-**Stability queue substantially closed (2026-07-18, session 3)** — branch `fix/stability-queue` (5 commits, **500 tests green**, +26 new). **10 of 11 open items shipped** across three waves: Wave A = 5 CodeRabbit correctness fixes (`467fcf8`); Wave B = A-2 titled-restore color re-key, F8 workspace tabId remap, F7 crash-recovery flag, A-7 negative-key allocator (`2ee343c`, `17734ab`); Wave C = B-2/F9 cold-restart-aware Pass-1 matching + windowId vote gating via a new `chrome.storage.session` restart-detection primitive (`ac4f580`). Every fix TDD'd; independently gated by full-suite re-run on the combined branch. Branch is PR-ready (PR #8 pattern).
+**Tab-group stability queue CLOSED — 11/11 (2026-07-18→19, session 3).** `master` @ `5767d74`, **509 tests green**, +35 new across two merged PRs. PR #9 = Waves A/B/C (10 items: 5 CodeRabbit correctness fixes, A-2/F8/F7/A-7, B-2/F9 cold-restart primitive). PR #10 = B-1 durable lineage key + cold-restart anchored re-association (the last item). Every fix TDD'd, independently full-suite-gated, and PR-reviewed (PR #10 also went through a cross-model Codex adversarial review that caught two wrong-graft paths, hardened before merge). The elephant-2 gate is now cleared.
 
-**Deferred:** B-1 (durable lineage key) — consciously deferred to its own focused session (schema migration + anchored lineage pass + RR-2 test rewrite; high risk; heuristic recovery only). Design: `docs/design/b1-durable-lineage-key.md`.
+**Two pre-existing reconcile issues** surfaced by B-1's adversarial review (NOT regressions — they predate B-1) are filed as follow-ups: cold-restart same-id collision stranding (Codex #1) and Pass 2b cross-origin title graft (Codex #3). See `docs/design/b1-durable-lineage-key.md`.
 
-Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: with the stability queue closed, the elephant-2 gate is cleared. Both architecture-gating spikes already **PASS** (`docs/agent-integration/DESIGN-RESEARCH.md`): Spike 1 — #24135 does NOT reproduce on codex 0.144.1; Spike 2 — panel-owned loopback WebSocket authenticates a real `chrome-extension://<id>` Origin with zero manifest changes.
-- Next fork: (A) merge the stability branch → open PR, (B) run agent Phase 0 spikes 4-9 (Track B), (C) start agent Phase 1, or (D) tackle deferred B-1. See `thoughts/shared/handoffs/linkmap-agent-phase0/next-session-plan.md`.
+Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: stability queue closed → elephant-2 cleared → agent track unlocked. Both architecture-gating spikes already **PASS** (`docs/agent-integration/DESIGN-RESEARCH.md`): Spike 1 — #24135 does NOT reproduce on codex 0.144.1; Spike 2 — panel-owned loopback WebSocket authenticates a real `chrome-extension://<id>` Origin with zero manifest changes.
+- Next fork: (A) agent Phase 0 spikes 4-9 (Track B), (B) start agent Phase 1 spine, (C) the two pre-existing reconcile follow-ups (#1/#3), or (D) theming engine. See `thoughts/shared/handoffs/linkmap-agent-phase0/next-session-plan.md`.
 - Started: 2026-07-18
 
 ## Completed
+- [x] **PR #10 merged** — B-1 durable lineage key + cold-restart anchored re-association (stability queue 11/11); Codex adversarial review + hardening; 509 tests (2026-07-19) `5767d74`
+- [x] **PR #9 merged** — stability queue 10/11: Waves A (5 CodeRabbit fixes) + B (A-2/F8/F7/A-7) + C (B-2/F9 cold-restart primitive); 500 tests (2026-07-18) `f5352aa`
 - [x] **PR #8 merged** — restart-fragility hardening (L-1/L-2, A-1/B-3/A-4/B-4) + Phase 0 agent spikes 1-2 (2026-07-18) `9ce6076`
 - [x] fix(groups): normalize quarantine windowId (A-4); repair cross-window group membership (B-4) (2026-07-18) `d7daa06`
 - [x] docs(agent): record Phase 0 Spike 1 (#24135) and Spike 2 (panel WS) results (2026-07-18) `c0eae09`
@@ -45,10 +47,10 @@ Next direction — **LinkMap Agent — Codex-Powered Browser Agent (Plan v1)**: 
 - [x] Project initialization (2026-02-25)
 
 ## Planned
-- [ ] Tab-group stability queue (remaining): A-2 color-override on titled restore, B-2/F9 Pass-1 tabId validation, F8 workspace tabId remap, F7 persisted crash-recovery flag, B-1 durable lineage key (high priority)
-- [ ] CodeRabbit PR #8 open items: move-helpers cross-window pinned-descendant, context.js persist-observability + retry-chain, negativeKeySeq (A-7), moveTabToGroup swallow-and-commit sibling (medium priority)
+- [ ] Pre-existing reconcile follow-ups from B-1 adversarial review: cold-restart same-id collision stranding (Codex #1, high), Pass 2b cross-origin title graft (Codex #3, medium) — see `docs/design/b1-durable-lineage-key.md`
 - [ ] Agent Phase 0 spikes 4-9: Neon reconnect, Notion 2025-09-03 upsert, keyring, tokens-per-task, page-action fidelity (medium priority; agent track)
-- [ ] Agent Phase 1 — read-only "ask my browser" spine (gated on the stability queue above)
+- [ ] Agent Phase 1 — read-only "ask my browser" spine (elephant-2 gate now cleared)
+- [ ] B-1 follow-up enhancement: title-based recovery with a safe disambiguation design (anchored pass currently requires exact-url OR title+same-origin) (low)
 - [ ] Theming engine (medium priority)
 
 ## Recent Planning Sessions
