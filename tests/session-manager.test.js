@@ -153,6 +153,7 @@ const { escapeHtml } = await import('../shared/utils.js');
 // ---------------------------------------------------------------------------
 
 const { MSG } = await import('../shared/constants.js');
+const { createSessionManager } = await import('../background/sessions.js');
 
 // ---------------------------------------------------------------------------
 // Tests: Constants
@@ -359,6 +360,119 @@ describe('per-window restore click handler', () => {
     assert.equal(expectedMessage.type, 'RESTORE_SESSION_WINDOW');
     assert.equal(expectedMessage.payload.sessionId, 'test-session');
     assert.equal(expectedMessage.payload.windowId, 123);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: checkForCrashRecovery — persisted-flag write/read/clear lifecycle (F7)
+//
+// F7: checkForCrashRecovery() used to ONLY fire a one-shot sendMessage that's
+// silently dropped when the side panel isn't open yet (the normal crash/
+// restart scenario), making the recovery banner structurally unreachable.
+// The fix persists a flag to chrome.storage.local that the side panel pulls
+// + clears on its own init, in addition to the live sendMessage push.
+// ---------------------------------------------------------------------------
+
+describe('checkForCrashRecovery', () => {
+  const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
+
+  function makeStorageLocal() {
+    const data = {};
+    return {
+      _data: data,
+      get(key) {
+        return Promise.resolve({ [key]: data[key] });
+      },
+      set(obj) {
+        Object.assign(data, obj);
+        return Promise.resolve();
+      },
+      remove(key) {
+        delete data[key];
+        return Promise.resolve();
+      },
+    };
+  }
+
+  beforeEach(() => {
+    globalThis.chrome.storage = { local: makeStorageLocal() };
+    sentMessages.length = 0;
+  });
+
+  function makeSessionManager() {
+    return createSessionManager({
+      getState: () => ({ tabs: new Map(), getWindowName: () => null, toSerializable: () => ({}) }),
+      ctx: { settings: {} },
+      saveState: () => {},
+      commitState: () => {},
+      broadcastState: () => {},
+      saveStateImmediate: async () => {},
+      DEBUG: false,
+    });
+  }
+
+  // Flush the fire-and-forget chrome.storage.local.set(...).catch() microtask
+  // chain inside checkForCrashRecovery before asserting on storage state.
+  async function flush() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('persists a crash-recovery flag to storage.local when a crash is detected', async () => {
+    const sessions = makeSessionManager();
+    sessions.checkForCrashRecovery(40, 12); // 40 > 5, 12 < 40 * 0.5
+    await flush();
+
+    const stored = globalThis.chrome.storage.local._data[CRASH_RECOVERY_KEY];
+    assert.ok(stored, 'expected a persisted crash-recovery flag');
+    assert.equal(stored.savedTabCount, 40);
+    assert.equal(stored.liveTabCount, 12);
+    assert.equal(typeof stored.ts, 'number');
+  });
+
+  it('does not persist a flag when tab counts do not indicate a crash', async () => {
+    const sessions = makeSessionManager();
+    sessions.checkForCrashRecovery(3, 2); // savedTabCount not > 5
+    await flush();
+
+    assert.equal(globalThis.chrome.storage.local._data[CRASH_RECOVERY_KEY], undefined);
+  });
+
+  it('does not persist a flag when live tab count is not low enough', async () => {
+    const sessions = makeSessionManager();
+    sessions.checkForCrashRecovery(10, 8); // 8 is not < 10 * 0.5
+    await flush();
+
+    assert.equal(globalThis.chrome.storage.local._data[CRASH_RECOVERY_KEY], undefined);
+  });
+
+  it('still sends the live CRASH_RECOVERY message for the already-open-panel case', () => {
+    const sessions = makeSessionManager();
+    sessions.checkForCrashRecovery(40, 12);
+
+    const msg = sentMessages.find(m => m.type === MSG.CRASH_RECOVERY);
+    assert.ok(msg, 'expected a CRASH_RECOVERY message to still be sent');
+    assert.equal(msg.payload.savedTabCount, 40);
+    assert.equal(msg.payload.liveTabCount, 12);
+  });
+
+  it('read+clear lifecycle: the persisted flag can be pulled once then cleared (side-panel pull-on-init contract)', async () => {
+    const sessions = makeSessionManager();
+    sessions.checkForCrashRecovery(40, 12);
+    await flush();
+
+    // Simulates sidepanel.js's own init pulling the flag...
+    const result = await globalThis.chrome.storage.local.get(CRASH_RECOVERY_KEY);
+    const flag = result[CRASH_RECOVERY_KEY];
+    assert.ok(flag, 'flag should be readable after being persisted');
+    assert.equal(flag.savedTabCount, 40);
+    assert.equal(flag.liveTabCount, 12);
+
+    // ...and then clearing it so a stale flag never re-appears on next open.
+    await globalThis.chrome.storage.local.remove(CRASH_RECOVERY_KEY);
+
+    const after = await globalThis.chrome.storage.local.get(CRASH_RECOVERY_KEY);
+    assert.equal(after[CRASH_RECOVERY_KEY], undefined, 'flag should be cleared after being consumed');
   });
 });
 

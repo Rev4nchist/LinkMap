@@ -12,6 +12,11 @@ import {
 const AUTO_SAVE_ALARM = 'linkmap-auto-save';
 const AUTO_ARCHIVE_ALARM = 'linkmap-auto-archive';
 
+// Persisted crash-recovery flag — belt-and-suspenders for the case where the
+// side panel isn't open yet when checkForCrashRecovery() fires (F7). Mirrored
+// literal in sidepanel.js (not exported from shared/constants.js).
+const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
+
 /**
  * Creates session management functions.
  * @param {Object} params
@@ -408,10 +413,21 @@ export function createSessionManager({ getState, ctx, saveState, commitState, br
 
   function checkForCrashRecovery(savedTabCount, liveTabCount) {
     if (savedTabCount > 5 && liveTabCount < savedTabCount * 0.5) {
+      const payload = { savedTabCount, liveTabCount, ts: Date.now() };
+
+      // Persist the flag so the side panel can pick it up on its OWN init,
+      // even when it wasn't open yet when this ran during the SW's init()
+      // (the normal crash/restart scenario). The one-shot sendMessage below
+      // is silently dropped in that case — this is the fix for F7.
+      try {
+        chrome.storage.local.set({ [CRASH_RECOVERY_KEY]: payload }).catch(() => {});
+      } catch (_e) {}
+
+      // Belt-and-suspenders: still push live for the already-open-panel case.
       try {
         chrome.runtime.sendMessage({
           type: MSG.CRASH_RECOVERY,
-          payload: { savedTabCount, liveTabCount },
+          payload,
         }).catch(() => {});
       } catch (_e) {}
 

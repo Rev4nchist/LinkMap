@@ -111,6 +111,30 @@ homeWindowReady.then(() => {
   });
 });
 
+// Pull + clear any persisted crash-recovery flag (F7). The background SW's
+// checkForCrashRecovery() persists this so the banner is still reachable
+// when the panel wasn't open at the time of the one-shot CRASH_RECOVERY
+// message (the normal crash/restart scenario — the panel opens later).
+homeWindowReady.then(checkPersistedCrashRecovery);
+
+// Mirrors the literal in background/sessions.js — not exported from
+// shared/constants.js.
+const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
+
+async function checkPersistedCrashRecovery() {
+  try {
+    const result = await chrome.storage.local.get(CRASH_RECOVERY_KEY);
+    const flag = result[CRASH_RECOVERY_KEY];
+    if (!flag) return;
+
+    // Consume once — clear before showing so a stale flag never re-appears.
+    await chrome.storage.local.remove(CRASH_RECOVERY_KEY);
+    showCrashRecoveryBanner(flag);
+  } catch (err) {
+    console.error('[LinkMap] Failed to check crash recovery flag:', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message Listener
 // ---------------------------------------------------------------------------
