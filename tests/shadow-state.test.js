@@ -1456,6 +1456,60 @@ describe('reconcileWithLiveTabs — B-1: anchored pass is a no-op on warm wake (
   });
 });
 
+describe('reconcileWithLiveTabs — B-1: anchored pass skips a cross-window child (Finding #2)', () => {
+  it('does not anchor a child whose saved window differs from its parent (its true tab is elsewhere)', () => {
+    const s = new ShadowState();
+    // Parent saved in window 100; child parented but saved in a DIFFERENT
+    // window 200 (dragged to another window pre-restart, keeping its parentId).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://p.example/home', title: 'ParentUnique', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 200, url: 'https://c.example/old', title: 'Report', index: 0 }));
+
+    const liveTabs = [
+      // Parent resolves via Pass 2b (title unique), lands in live window 500.
+      makeLiveTab({ id: 550, windowId: 500, url: 'https://p.example/home2', title: 'ParentUnique', index: 0 }),
+      // An UNRELATED 'Report' tab in the PARENT's window — the tempting wrong
+      // graft the anchored pass must refuse for this cross-window child.
+      makeLiveTab({ id: 511, windowId: 500, url: 'https://c.example/unrelated', title: 'Report', index: 1 }),
+      // Decoy 'Report' in another window — makes the title globally ambiguous
+      // so Pass 2b refuses the child (otherwise Pass 2b would match it directly
+      // and the anchored pass — and this guard — would never engage).
+      makeLiveTab({ id: 512, windowId: 900, url: 'https://c.example/decoy', title: 'Report', index: 9 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(s.getTab(5), null, 'cross-window child is not anchored — it is refused, then dead-swept');
+    assert.equal(s.getTab(511)?.parentId, null, 'the parent-window Report tab stays an untouched root');
+    assert.ok(!s.getTab(550)?.children.includes(511), 'parent did not adopt the unrelated same-title tab');
+  });
+});
+
+describe('reconcileWithLiveTabs — B-1: anchored match requires same-origin for a url-changed child (Finding #3)', () => {
+  it('anchors a same-origin url-changed child, but a cross-origin same-title candidate is not corroborated', () => {
+    const s = new ShadowState();
+    // Parent (title unique) resolves via Pass 2b to window 500. Child's url
+    // changed but stays on the SAME origin (docs.example) with its title.
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://p.example/home', title: 'ParentUnique', index: 0 }));
+    s.addTab(5, makeTab({ tabId: 5, parentId: 1, windowId: 100, url: 'https://docs.example/report-draft', title: 'Report', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 550, windowId: 500, url: 'https://p.example/home2', title: 'ParentUnique', index: 0 }),
+      // Same-origin (docs.example) + same title, in the parent's window — the
+      // correct anchored match for the url-changed child.
+      makeLiveTab({ id: 511, windowId: 500, url: 'https://docs.example/report-final', title: 'Report', index: 5 }),
+      // Same title but DIFFERENT origin, in another window — a decoy that makes
+      // the title globally ambiguous (so Pass 2b refuses) and must never be
+      // chosen: title alone across origins is not sufficient corroboration.
+      makeLiveTab({ id: 512, windowId: 900, url: 'https://evil.example/report', title: 'Report', index: 9 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    assert.equal(s.getTab(511)?.parentId, 550, 'same-origin url-changed child anchored under its parent');
+    assert.equal(s.getTab(512)?.parentId, null, 'the cross-origin same-title decoy is left an untouched root');
+  });
+});
+
 describe('reconcileWithLiveTabs — RR-8: title matching is window-aware', () => {
   it('matches a renamed tab to its own window, not a same-title tab in another window', () => {
     const s = new ShadowState();

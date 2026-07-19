@@ -1052,12 +1052,27 @@ export class ShadowState {
     // own children within the same pass.
     let passAnchorCount = 0;
     if (coldRestart) {
+      const sameOrigin = (a, b) => {
+        try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
+      };
+      // Anchored matches require EXACT url corroboration, OR — for a tab whose
+      // url changed across restart (SPA/redirect) but whose title survived — a
+      // title match backed by SAME-ORIGIN evidence. Title-ALONE (cross-origin)
+      // is refused (adversarial review, Finding #3): the anchored pass runs on
+      // Pass-2b's already-ambiguous-title leftovers, where a same-title but
+      // unrelated cross-site tab in the parent's window could otherwise be
+      // grafted as a false lineage edge. Requiring the origin to match makes an
+      // unrelated collision far rarer (it must be the same site AND same title
+      // AND the unique in-window candidate). A residual same-origin same-title
+      // collision remains possible but is narrow and only mis-parents (no data
+      // loss); see docs/design/b1-durable-lineage-key.md.
       const isAnchorCorroborated = (node, live) => {
         const liveUrl = live.url || live.pendingUrl || '';
-        const urlOk = !!node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank'
-          && node.url === liveUrl;
+        const nodeUrl = node.url || '';
+        const usableUrl = !!nodeUrl && nodeUrl !== 'chrome://newtab/' && nodeUrl !== 'about:blank';
+        if (usableUrl && nodeUrl === liveUrl) return true; // exact url — strongest
         const titleOk = !!node.title && node.title !== 'New Tab' && node.title === live.title;
-        return urlOk || titleOk;
+        return titleOk && usableUrl && sameOrigin(nodeUrl, liveUrl);
       };
 
       const anchorQueue = [...matchedLiveIds].filter((id) => this.tabs.has(id));
@@ -1077,13 +1092,22 @@ export class ShadowState {
           const childNode = this.tabs.get(childId);
           if (!childNode) continue;
 
+          // Guard (Finding #2): only anchor a child that was SAVED in the same
+          // window as its parent. A child dragged to a different window keeps
+          // its parentId while its windowId diverges (onAttached updates
+          // windowId, never parentId — see tab-events.js), so its true live
+          // tab is NOT in the parent's window. Narrowing such a child to the
+          // parent's live window would risk grafting an unrelated same-title
+          // tab; instead let it fall through to dead-sweep / orphan-repair.
+          if (childNode.windowId !== parentNode.windowId) continue;
+
           const pool = liveTabs.filter(
             (t) => !matchedLiveIds.has(t.id) && t.windowId === parentLiveTab.windowId
           );
           if (pool.length === 0) continue;
 
           const corroborated = pool.filter((live) => isAnchorCorroborated(childNode, live));
-          if (corroborated.length !== 1) continue; // no signal, or ambiguous — refuse
+          if (corroborated.length !== 1) continue; // no signal, or ambiguous in-window — refuse
 
           const match = corroborated[0];
           this.replaceTabId(childId, match.id);
