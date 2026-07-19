@@ -85,7 +85,7 @@ export const MSG = {
 
 // Storage
 export const STORAGE_KEY = 'linkmap_state';
-export const STORAGE_VERSION = 1;
+export const STORAGE_VERSION = 2;
 
 // chrome.storage.session marker used to distinguish a genuine cold browser
 // restart (tab ids reassigned; storage.session cleared) from a routine

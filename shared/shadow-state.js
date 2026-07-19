@@ -42,6 +42,10 @@ function createNode(tabId, data) {
     groupId:    data.groupId ?? UNGROUPED_GROUP_ID,
     index:      data.index ?? 0,
     windowId:   data.windowId ?? 0,
+    // B-1: durable lineage key — decouples lineage identity from the ephemeral
+    // tabId (which Chrome reassigns on cold restart). null here means "assign
+    // one from the instance counter"; see ShadowState#addTab.
+    lmId:       data.lmId ?? null,
   };
 }
 
@@ -122,6 +126,12 @@ export class ShadowState {
 
     /** @type {Map<number, string>} windowId -> user-assigned name */
     this.windowNames = new Map();
+
+    /**
+     * @type {number} Monotonic counter for lmId (B-1 durable lineage key).
+     * Next value to hand out; incremented on every assignment.
+     */
+    this.nextLmId = 1;
   }
 
   // -----------------------------------------------------------------------
@@ -142,6 +152,17 @@ export class ShadowState {
     if (this.tabs.has(tabId)) return;
 
     const node = createNode(tabId, nodeData);
+
+    // B-1: assign a durable lmId when the caller didn't supply one (the
+    // normal path — onCreated, session restore, reconcile's "add new tab").
+    // If a caller DID supply one explicitly, keep it but make sure the
+    // counter never hands out a colliding value later.
+    if (node.lmId == null) {
+      node.lmId = this.nextLmId++;
+    } else if (node.lmId >= this.nextLmId) {
+      this.nextLmId = node.lmId + 1;
+    }
+
     const parent = node.parentId != null ? this.tabs.get(node.parentId) : null;
 
     if (parent) {
@@ -691,6 +712,9 @@ export class ShadowState {
       orphanedGroups: Object.fromEntries(this.orphanedGroups),
       theme: this.theme,
       windowNames: Object.fromEntries(this.windowNames),
+      // B-1: durable lineage key counter (each node's own lmId travels
+      // along with it inside `tabs` above — no extra work needed there).
+      nextLmId: this.nextLmId,
     };
   }
 
@@ -711,6 +735,22 @@ export class ShadowState {
       for (const [key, node] of Object.entries(data.tabs)) {
         state.tabs.set(Number(key), node);
       }
+    }
+
+    // B-1: STORAGE_VERSION 1->2 migration — backfill lmId for any node that
+    // predates the durable lineage key (a v1 snapshot has none at all).
+    // Seed nextLmId strictly above both the max existing lmId AND the node
+    // count before handing out any new ones, so backfilled ids can never
+    // collide with an id assigned in a later session.
+    state.nextLmId = typeof data.nextLmId === 'number' ? data.nextLmId : 1;
+    let maxLmId = 0;
+    for (const node of state.tabs.values()) {
+      if (typeof node.lmId === 'number' && node.lmId > maxLmId) maxLmId = node.lmId;
+    }
+    if (state.nextLmId <= maxLmId) state.nextLmId = maxLmId + 1;
+    if (state.nextLmId <= state.tabs.size) state.nextLmId = state.tabs.size + 1;
+    for (const node of state.tabs.values()) {
+      if (node.lmId == null) node.lmId = state.nextLmId++;
     }
 
     state.rootIds = Array.isArray(data.rootIds) ? [...data.rootIds] : [];
@@ -811,15 +851,21 @@ export class ShadowState {
   /**
    * Synchronizes in-memory state with the actual Chrome tab list.
    *
-   * Four-pass matching for cross-restart resilience:
-   *   Pass 1:  Match by tabId (same session, fast path)
-   *   Pass 2:  Match unmatched saved tabs by URL fingerprint (cross-restart)
-   *   Pass 2b: Title-based fallback (URL changed but title preserved — SPAs, redirects)
-   *   Pass 3:  Positional matching within same window (generic URLs like newtab/blank)
+   * Matching passes for cross-restart resilience:
+   *   Pass 1:      Match by tabId (same session, fast path)
+   *   Pass 2:      Match unmatched saved tabs by URL fingerprint (cross-restart)
+   *   Pass 2b:     Title-based fallback (URL changed but title preserved — SPAs, redirects)
+   *   Anchored:    (B-1, coldRestart only) Re-attach still-unmatched lineage
+   *                children of an already-matched parent onto a corroborated
+   *                live tab in the parent's live window.
+   *   Pass 3:      Positional matching within same window (generic URLs like newtab/blank)
    *
    * Passes 2/2b disambiguate same-URL/same-title duplicates by the mapped
    * windowId and REFUSE ambiguous buckets rather than guessing (RR-1/RR-8).
-   * Pass 3 never positionally guesses a lineage-bearing node (RR-2).
+   * Pass 3 never positionally guesses a lineage-bearing node (RR-2b). The
+   * anchored pass is the one exception: it MAY match a lineage-bearing node,
+   * but only with mandatory url/title corroboration — window/adjacency alone
+   * is never sufficient (RR-2a).
    *
    * After matching, dead tabs are removed and orphaned children are re-rooted.
    *
@@ -831,8 +877,9 @@ export class ShadowState {
    *   valid). When true, Pass 1's same-id match requires URL/title
    *   corroboration — otherwise a coincidental id collision with an
    *   unrelated tab would graft it into the tree and cast a phantom vote
-   *   in the windowId map. Defaults to false, which preserves today's
-   *   unconditional same-id match (warm-wake behavior, byte-identical).
+   *   in the windowId map — and the anchored pass runs. Defaults to false,
+   *   which preserves today's unconditional same-id match and skips the
+   *   anchored pass entirely (warm-wake behavior, byte-identical).
    */
   reconcileWithLiveTabs(liveTabs, { coldRestart = false } = {}) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
@@ -989,7 +1036,93 @@ export class ShadowState {
       if (idx !== -1) candidates.splice(idx, 1);
     }
 
-    // Preliminary windowId map from Pass 1 + 2 + 2b matches, for Pass 3.
+    // Anchored re-association pass (B-1): only on a genuine cold restart.
+    // For each already-matched parent, try to re-attach its still-unmatched
+    // lineage children onto a live tab in the parent's LIVE window. Unlike
+    // Passes 2/2b (which vote-map windowIds through a snapshot taken before
+    // their own loop runs, so a same-pass anchor can't yet help disambiguate
+    // a sibling processed later in that same loop), this pass looks up the
+    // parent's live window directly — no staleness window. Candidates are
+    // narrowed to the parent's live window, but a match additionally
+    // REQUIRES url or title corroboration; window/adjacency alone is never
+    // sufficient (that would be exactly the RR-2 positional-guess bug this
+    // pass must not reintroduce). Ambiguous or uncorroborated candidates are
+    // refused and fall through to dead-sweep + orphan-repair, same as today.
+    // Runs top-down (BFS) so a newly-anchored child can itself anchor its
+    // own children within the same pass.
+    let passAnchorCount = 0;
+    if (coldRestart) {
+      const sameOrigin = (a, b) => {
+        try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
+      };
+      // Anchored matches require EXACT url corroboration, OR — for a tab whose
+      // url changed across restart (SPA/redirect) but whose title survived — a
+      // title match backed by SAME-ORIGIN evidence. Title-ALONE (cross-origin)
+      // is refused (adversarial review, Finding #3): the anchored pass runs on
+      // Pass-2b's already-ambiguous-title leftovers, where a same-title but
+      // unrelated cross-site tab in the parent's window could otherwise be
+      // grafted as a false lineage edge. Requiring the origin to match makes an
+      // unrelated collision far rarer (it must be the same site AND same title
+      // AND the unique in-window candidate). A residual same-origin same-title
+      // collision remains possible but is narrow and only mis-parents (no data
+      // loss); see docs/design/b1-durable-lineage-key.md.
+      const isAnchorCorroborated = (node, live) => {
+        const liveUrl = live.url || live.pendingUrl || '';
+        const nodeUrl = node.url || '';
+        const usableUrl = !!nodeUrl && nodeUrl !== 'chrome://newtab/' && nodeUrl !== 'about:blank';
+        if (usableUrl && nodeUrl === liveUrl) return true; // exact url — strongest
+        const titleOk = !!node.title && node.title !== 'New Tab' && node.title === live.title;
+        return titleOk && usableUrl && sameOrigin(nodeUrl, liveUrl);
+      };
+
+      const anchorQueue = [...matchedLiveIds].filter((id) => this.tabs.has(id));
+      const queued = new Set(anchorQueue);
+      for (let qi = 0; qi < anchorQueue.length; qi++) {
+        const parentId = anchorQueue[qi];
+        const parentLiveTab = liveById.get(parentId);
+        const parentNode = this.tabs.get(parentId);
+        if (!parentLiveTab || !parentNode) continue;
+
+        const unmatchedChildIds = parentNode.children.filter(
+          (cid) => !matchedLiveIds.has(cid) && !liveById.has(cid)
+        );
+        if (unmatchedChildIds.length === 0) continue;
+
+        for (const childId of unmatchedChildIds) {
+          const childNode = this.tabs.get(childId);
+          if (!childNode) continue;
+
+          // Guard (Finding #2): only anchor a child that was SAVED in the same
+          // window as its parent. A child dragged to a different window keeps
+          // its parentId while its windowId diverges (onAttached updates
+          // windowId, never parentId — see tab-events.js), so its true live
+          // tab is NOT in the parent's window. Narrowing such a child to the
+          // parent's live window would risk grafting an unrelated same-title
+          // tab; instead let it fall through to dead-sweep / orphan-repair.
+          if (childNode.windowId !== parentNode.windowId) continue;
+
+          const pool = liveTabs.filter(
+            (t) => !matchedLiveIds.has(t.id) && t.windowId === parentLiveTab.windowId
+          );
+          if (pool.length === 0) continue;
+
+          const corroborated = pool.filter((live) => isAnchorCorroborated(childNode, live));
+          if (corroborated.length !== 1) continue; // no signal, or ambiguous in-window — refuse
+
+          const match = corroborated[0];
+          this.replaceTabId(childId, match.id);
+          matchedLiveIds.add(match.id);
+          tabIdMap.set(childId, match.id);
+          passAnchorCount++;
+          const oldWidAnchor = savedTabWindowIds.get(childId);
+          if (oldWidAnchor !== undefined) savedTabWindowIds.set(match.id, oldWidAnchor);
+
+          if (!queued.has(match.id)) { anchorQueue.push(match.id); queued.add(match.id); }
+        }
+      }
+    }
+
+    // Preliminary windowId map from Pass 1 + 2 + 2b + anchored, for Pass 3.
     const prelimWindowIdMap = buildWindowMap();
 
     // Pass 3: Positional matching for generic/remaining unmatched tabs
@@ -1149,7 +1282,8 @@ export class ShadowState {
     const stats = {
       savedCount: savedTabWindowIds.size,
       liveCount: liveTabs.length,
-      pass1: pass1Count, pass2: pass2Count, pass2b: pass2bCount, pass3: pass3Count,
+      pass1: pass1Count, pass2: pass2Count, pass2b: pass2bCount,
+      passAnchor: passAnchorCount, pass3: pass3Count,
       deadRemoved: deadIds.length,
       savedRelationships,
       survivingRelationships,

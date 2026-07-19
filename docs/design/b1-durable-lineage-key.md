@@ -33,6 +33,20 @@ Split into two:
 - Anchored pass never grafts under an unmatched parent (property test on a dead-anchor fixture).
 - Cold vs warm simulated via the `{ coldRestart }` option seam (already exists post-B-2) — no `chrome.storage.session` mock needed at the reconcile layer.
 
+## As-shipped hardening (post adversarial review, 2026-07-19)
+
+A cross-model adversarial review (Codex gpt-5.5) of the implemented anchored pass found two wrong-graft paths in the new code and two pre-existing issues. The anchored pass was hardened before merge:
+
+- **Corroboration (Finding #3 mitigation):** an anchored match requires **exact url** OR **(title match + same origin)**. Title-ALONE across origins is refused — the anchored pass runs on Pass-2b's already-ambiguous-title leftovers, where a same-title but unrelated cross-site tab could otherwise be grafted. This makes the anchored pass **strictly stricter than the pre-existing Pass 2b** (which title-matches lineage cross-origin with no origin check). Residual: a same-origin same-title collision is still possible but narrow, and only mis-parents (no data loss).
+- **Same-window guard (Finding #2):** a child is only anchored if its saved window equals its parent's saved window. A child dragged to another window keeps its `parentId` while its `windowId` diverges (`onAttached` updates windowId, never parentId); its true live tab is not in the parent's window, so anchoring it there would risk a false graft. Cross-window children fall through to dead-sweep instead.
+
+### Pre-existing follow-ups surfaced by the review (NOT B-1 regressions)
+
+Both live in the broader reconcile title-matching / gate logic that predates B-1 (from B-2 / PR #8); the anchored pass mirrors but does not introduce them. Tracked as focused follow-ups:
+
+- **Same-id collision stranding (Codex #1, ~shadow-state.js Pass-1 gate + dead-sweep):** on cold restart, a saved node whose id coincidentally collides with an unrelated live id is rejected by Pass 1's corroboration but then skipped by every recovery pass AND by dead-sweep (`!liveById.has(id)` is false), so it lingers stale and gets its cosmetic fields overwritten by the unrelated tab while keeping its old lineage. Fix direction: track Pass-1 corroboration-rejects as genuinely unmatched (feed them to Passes 2/2b/anchored/3 and dead-sweep).
+- **Pass 2b cross-origin title graft (Codex #3, ~shadow-state.js Pass 2b):** Pass 2b matches a url-changed child to a same-title live tab with no origin check, so it can graft lineage onto a cross-origin same-title tab. The anchored pass now requires same-origin; Pass 2b does not. Fix direction: extend the same-origin corroboration to Pass 2b.
+
 ## Why deferred, not bundled with B-2
 
 B-1 couples three independently-risky changes — a schema migration touching every persisted node, a new reconcile pass with subtle correctness properties, and rewriting a test that encodes a safety invariant. Bundled, a reconciliation regression can't be cleanly attributed among them — the exact trap that keeps "standing residuals" standing. It deserves its own branch, review, and migration-focused test pass.
