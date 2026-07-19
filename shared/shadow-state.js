@@ -830,6 +830,10 @@ export class ShadowState {
     const matchedLiveIds = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
     const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
+    // F8: accumulate old->new tabId remaps across passes 2/2b/3 so callers
+    // (e.g. background.js init) can remap tabId references stored outside
+    // the tree itself, such as workspace membership lists.
+    const tabIdMap = new Map();
 
     // Snapshot saved windowIds BEFORE they get overwritten at the update pass
     const savedTabWindowIds = new Map();
@@ -907,6 +911,7 @@ export class ShadowState {
       // Remap saved ID to live ID — preserves tree structure
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
+      tabIdMap.set(savedId, best.id);
       pass2Count++;
 
       // Propagate saved windowId to new tab ID so vote-counting can build windowIdMap
@@ -948,6 +953,7 @@ export class ShadowState {
 
       this.replaceTabId(savedId, best.id);
       matchedLiveIds.add(best.id);
+      tabIdMap.set(savedId, best.id);
       pass2bCount++;
       const oldWid2b = savedTabWindowIds.get(savedId);
       if (oldWid2b !== undefined) savedTabWindowIds.set(best.id, oldWid2b);
@@ -992,6 +998,7 @@ export class ShadowState {
         const matchedLiveTab = windowTabs[bestIdx];
         this.replaceTabId(savedId, matchedLiveTab.id);
         matchedLiveIds.add(matchedLiveTab.id);
+        tabIdMap.set(savedId, matchedLiveTab.id);
         pass3Count++;
         const oldWid3 = savedTabWindowIds.get(savedId);
         if (oldWid3 !== undefined) savedTabWindowIds.set(matchedLiveTab.id, oldWid3);
@@ -1115,7 +1122,7 @@ export class ShadowState {
     };
     console.log('[LinkMap] Reconciliation:', JSON.stringify(stats));
 
-    return { windowIdMap, stats };
+    return { windowIdMap, tabIdMap, stats };
   }
 
   /**
@@ -1155,7 +1162,19 @@ export class ShadowState {
     // mismatch, keep the entry available for normal tier matching by
     // re-keying it under a synthetic negative id so it stops colliding with
     // the live group's id.
-    let negativeKeySeq = -1;
+    //
+    // A-7: orphanedGroups is persisted/serialized (fromStorage/toSerializable)
+    // and this method can be called repeatedly on the SAME instance across
+    // restarts, so a hardcoded "-1" start would silently collide with — and
+    // overwrite — a negative-keyed entry already sitting in the map from an
+    // earlier call or from deserialized state. Seed strictly below the
+    // lowest key already present so a freshly-allocated key can never reuse
+    // one that's still in use.
+    let minExistingKey = 0;
+    for (const key of this.orphanedGroups.keys()) {
+      if (key < minExistingKey) minExistingKey = key;
+    }
+    let negativeKeySeq = minExistingKey - 1;
     for (const group of liveGroups) {
       const entry = this.orphanedGroups.get(group.id);
       if (!entry) continue;
@@ -1232,6 +1251,21 @@ export class ShadowState {
           if (matched) {
             this.groups.get(group.id).title = matched.title;
             if (matched.colorOverride) this.groupColors[group.id] = matched.colorOverride;
+          }
+        } else {
+          // A-2: Chrome preserved the title across the restart, so the
+          // untitled-rescue tier above never fires — but a quarantined
+          // colorOverride (custom hex) for this same group would otherwise
+          // sit unused until the TTL and resolveGroupColor() would fall back
+          // to the plain native color. Match by title AND color (never title
+          // alone, to minimize the A-3 same-title-collision surface).
+          for (const entry of this.orphanedGroups.values()) {
+            if (now - entry.orphanedAt > ORPHANED_GROUP_TTL_MS) continue; // expired
+            if (entry.title === group.title && entry.color === group.color) {
+              if (entry.colorOverride) this.groupColors[group.id] = entry.colorOverride;
+              this.orphanedGroups.delete(entry.id);
+              break;
+            }
           }
         }
       }

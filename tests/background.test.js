@@ -319,6 +319,39 @@ describe('background.js initialization', () => {
     // the 500ms save debounce. An immediate save must already be persisted.
     assert.ok(chromeMock.storage.local._data.linkmap_state, 'state persisted immediately after init, before the debounce would have fired');
   });
+
+  it('F8: remaps workspace tabIds through the reconcile tabIdMap and drops closed tabs', async () => {
+    const savedState = {
+      version: 1,
+      tabs: {
+        100: { tabId: 100, parentId: null, children: [], title: 'GitHub', url: 'https://github.com', favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 },
+      },
+      rootIds: [100],
+      collapsed: [],
+      groupColors: {},
+      theme: 'dracula',
+    };
+
+    chromeMock.storage.local._data.linkmap_workspaces = {
+      workspaces: [
+        { id: 'w1', name: 'Work', tabIds: [100, 999] }, // 999 = a tab that no longer exists
+      ],
+      activeWorkspaceId: 'w1',
+    };
+
+    // After "restart" Chrome assigns tab 100 a brand-new id (501); tab 999
+    // never comes back (closed tab).
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 501, active: true })];
+      return [makeChromeTab({ id: 501, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, savedState);
+
+    const stored = chromeMock.storage.local._data.linkmap_workspaces;
+    assert.ok(stored, 'workspaces were re-saved after reconcile');
+    assert.deepEqual(stored.workspaces[0].tabIds, [501], 'tabId remapped through reconcile, closed tab dropped');
+  });
 });
 
 // ---------------------------------------------------------------------------

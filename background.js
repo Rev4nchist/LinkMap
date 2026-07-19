@@ -89,7 +89,7 @@ async function init() {
 
     // 3. Query all live tabs and reconcile
     const liveTabs = await chrome.tabs.query({});
-    const { windowIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
+    const { windowIdMap, tabIdMap, stats } = context.state.reconcileWithLiveTabs(liveTabs);
 
     // 3c. Check for crash recovery
     sessions.checkForCrashRecovery(savedTabCount, liveTabs.length);
@@ -200,6 +200,30 @@ async function init() {
       const wsData = wsResult[WORKSPACES_KEY];
       ctx.workspaces = wsData.workspaces || [];
       ctx.activeWorkspaceId = wsData.activeWorkspaceId || null;
+
+      // F8: workspace tabIds are saved membership lists outside the tree —
+      // reconcileWithLiveTabs() never touched them. Remap through tabIdMap
+      // (tabs that survived restart under a new id), keep ids that matched
+      // Pass 1 (same id, still live), and drop ids for tabs that never came
+      // back (closed while the browser was shut down).
+      let workspacesChanged = false;
+      for (const ws of ctx.workspaces) {
+        if (!Array.isArray(ws.tabIds) || ws.tabIds.length === 0) continue;
+        const remapped = [];
+        for (const id of ws.tabIds) {
+          if (tabIdMap.has(id)) {
+            remapped.push(tabIdMap.get(id));
+          } else if (context.state.tabs.has(id)) {
+            remapped.push(id);
+          }
+          // else: tab is gone — drop it
+        }
+        if (remapped.length !== ws.tabIds.length || remapped.some((id, i) => id !== ws.tabIds[i])) {
+          workspacesChanged = true;
+        }
+        ws.tabIds = remapped;
+      }
+      if (workspacesChanged) context.saveWorkspaces();
     }
     const notesResult = await chrome.storage.local.get(TAB_NOTES_KEY);
     ctx.tabNotes = notesResult[TAB_NOTES_KEY] || {};
