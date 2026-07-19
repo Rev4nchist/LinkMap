@@ -1599,6 +1599,122 @@ describe('reconcileWithLiveTabs — coldRestart: default (warm wake) is unchange
 });
 
 // ---------------------------------------------------------------------------
+// #6: cold-restart same-id collision stranding (sweep-only fix)
+// ---------------------------------------------------------------------------
+
+describe('reconcileWithLiveTabs — coldRestart #6: same-id collision must not wrong-graft', () => {
+  it('sweeps the stranded child instead of grafting the unrelated tab under the parent (reincarnation present)', () => {
+    const s = new ShadowState();
+    // Saved parent + child. On cold restart Chrome reassigns ids, so the child's
+    // saved id (42) coincidentally collides with an UNRELATED live tab; the child's
+    // true reincarnation comes up under a different id (102).
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://unrelated.example/x', title: 'Unrelated', index: 2 }),
+      makeLiveTab({ id: 102, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    const unrelated = s.getTab(42);
+    assert.ok(unrelated, 'the unrelated live tab exists as a node');
+    assert.equal(unrelated.url, 'https://unrelated.example/x');
+    assert.equal(unrelated.parentId, null, 'the unrelated tab is a ROOT, never grafted under the saved parent');
+
+    const parent = s.getTab(1);
+    assert.ok(parent, 'parent survived');
+    const childUrls = parent.children.map((cid) => s.getTab(cid)?.url);
+    assert.ok(!childUrls.includes('https://unrelated.example/x'), 'no wrong-graft: unrelated content is not a child of the parent');
+
+    const trueChild = s.getTab(102);
+    assert.ok(trueChild && trueChild.url === 'https://child.example/page', 'true child recovered as a node (re-rooted)');
+  });
+
+  it('sweeps the stranded child when its reincarnation is absent', () => {
+    const s = new ShadowState();
+    s.addTab(1, makeTab({ tabId: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }));
+    s.addTab(42, makeTab({ tabId: 42, parentId: 1, windowId: 100, url: 'https://child.example/page', title: 'Child', index: 1 }));
+
+    const liveTabs = [
+      makeLiveTab({ id: 1, windowId: 100, url: 'https://parent.example/home', title: 'Parent', index: 0 }),
+      makeLiveTab({ id: 42, windowId: 100, url: 'https://unrelated.example/x', title: 'Unrelated', index: 1 }),
+    ];
+
+    s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+    const parent = s.getTab(1);
+    assert.equal(parent.children.length, 0, 'parent has no phantom child after the stranded child is swept');
+    assert.equal(s.getTab(42).parentId, null, 'the unrelated tab is a clean root');
+    assert.equal(s.getTab(42).url, 'https://unrelated.example/x');
+  });
+
+  // Regression locks: these pass on sweep-only and would go RED if #6 were ever
+  // changed to re-map rejected nodes (the reproduced Q4/Q5b data-loss paths).
+  it('does not starve a genuinely-unmatched node when another saved node is id-collided (Q4 lock)', () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      const s = new ShadowState();
+      // A (id 42) collides with an unrelated live tab; A shares url/title with B.
+      s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 0 }));
+      // B (id 1000): no live tab has this id — genuinely unmatched, must recover.
+      s.addTab(1000, makeTab({ tabId: 1000, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 5 }));
+
+      const liveTabs = [
+        makeLiveTab({ id: 42, windowId: 999, url: 'https://random.example/x', title: 'Random', index: 0 }),
+        makeLiveTab({ id: 555, windowId: 100, url: 'https://x.example/shared', title: 'Shared', index: 1 }),
+      ];
+
+      const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+      assert.equal(tabIdMap.get(1000), 555, 'genuine node B recovered onto its live candidate (never starved)');
+      assert.ok(!tabIdMap.has(42), 'the id-collided rejected node A is never remapped (sweep-only)');
+      assert.ok(!warnings.some((w) => w.includes('replaceTabId collision')), 'no destructive replaceTabId collision');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('does not destroy lineage when two saved nodes collide on cold-restart ids (Q5b lock)', () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
+    try {
+      const s = new ShadowState();
+      // Grandparent with a pinned child C (saved id 1000).
+      s.addTab(9, makeTab({ tabId: 9, windowId: 100, url: 'https://gp.example/home', title: 'GP', index: 0 }));
+      s.addTab(1000, makeTab({ tabId: 1000, parentId: 9, pinned: true, windowId: 100, url: 'https://c-true.example/y', title: 'C-True', index: 1 }));
+      // A (saved id 42) collides with an unrelated live tab; A's TRUE reincarnation is
+      // live id 1000 — coincidentally the same id C is saved under.
+      s.addTab(42, makeTab({ tabId: 42, windowId: 100, url: 'https://a-true.example/x', title: 'A-True', index: 2 }));
+
+      const liveTabs = [
+        makeLiveTab({ id: 9, windowId: 100, url: 'https://gp.example/home', title: 'GP', index: 0 }),
+        makeLiveTab({ id: 42, windowId: 999, url: 'https://random.example/z', title: 'Random', index: 0 }),
+        makeLiveTab({ id: 1000, windowId: 100, url: 'https://a-true.example/x', title: 'A-True', index: 1 }),
+        makeLiveTab({ id: 2000, windowId: 100, url: 'https://c-true.example/y', title: 'C-True', index: 2 }),
+      ];
+
+      const { tabIdMap } = s.reconcileWithLiveTabs(liveTabs, { coldRestart: true });
+
+      assert.ok(!warnings.some((w) => w.includes('replaceTabId collision')), 'no destructive replaceTabId collision guard fired');
+      for (const [, node] of s.tabs) {
+        if (node.parentId != null) {
+          assert.ok(s.tabs.has(node.parentId), 'no dangling parentId (no corrupted lineage)');
+        }
+      }
+      assert.ok(tabIdMap.get(1000) !== 2000, 'no false lineage-losing remap recorded for C');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tree-integrity hardening (TI-1, TI-2, TI-3)
 // ---------------------------------------------------------------------------
 

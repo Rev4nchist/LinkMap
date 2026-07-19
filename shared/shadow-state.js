@@ -884,6 +884,11 @@ export class ShadowState {
   reconcileWithLiveTabs(liveTabs, { coldRestart = false } = {}) {
     const liveById = new Map(liveTabs.map((t) => [t.id, t]));
     const matchedLiveIds = new Set();
+    // #6: saved ids that Pass 1 rejected on cold restart because their id
+    // coincidentally collides with an UNRELATED live tab (corroboration failed).
+    // These are genuinely unmatched — they must be dead-swept, not left to be
+    // content-overwritten by the colliding tab while keeping stale lineage.
+    const pass1Rejected = new Set();
     let pass1Count = 0, pass2Count = 0, pass2bCount = 0, pass3Count = 0;
     const savedRelationships = [...this.tabs.values()].filter(n => n.parentId != null).length;
     // F8: accumulate old->new tabId remaps across passes 2/2b/3 so callers
@@ -946,6 +951,10 @@ export class ShadowState {
         if (accept) {
           matchedLiveIds.add(id);
           pass1Count++;
+        } else {
+          // Cold-restart id collision with an unrelated tab — record it so the
+          // dead-sweep removes this stranded node (#6).
+          pass1Rejected.add(id);
         }
       }
     }
@@ -1170,7 +1179,14 @@ export class ShadowState {
     // (a) Remove dead tabs (saved tabs with no live match).
     const deadIds = [];
     for (const id of this.tabs.keys()) {
-      if (!liveById.has(id)) deadIds.push(id);
+      // A saved tab with no live counterpart is dead. #6: a Pass-1 reject
+      // (still-unmatched) is ALSO dead — its id belongs to an unrelated live tab
+      // now, so `!liveById.has(id)` is false, yet the saved node is stranded. It
+      // is never re-mapped (recovery gates keep the `!liveById.has(id)` proxy), so
+      // sweeping it here can never strand a node another pass legitimately claimed.
+      if (!liveById.has(id) || (pass1Rejected.has(id) && !matchedLiveIds.has(id))) {
+        deadIds.push(id);
+      }
     }
     for (const id of deadIds) {
       this.removeTab(id);
