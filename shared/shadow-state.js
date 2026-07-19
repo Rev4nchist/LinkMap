@@ -118,6 +118,15 @@ function sameOrigin(a, b) {
   } catch { return false; }
 }
 
+/**
+ * A URL usable for origin corroboration: present and not a generic blank page
+ * (`chrome://newtab/` / `about:blank`). Used by Pass 1, Pass 2b, and the
+ * anchored pass to decide whether an origin check is meaningful.
+ */
+function isUsableUrl(url) {
+  return !!url && url !== 'chrome://newtab/' && url !== 'about:blank';
+}
+
 export class ShadowState {
   constructor() {
     /** @type {Map<number, Object>} tabId -> TabNode */
@@ -972,8 +981,8 @@ export class ShadowState {
           const node = this.tabs.get(id);
           const live = liveById.get(id);
           const liveUrl = live.url || live.pendingUrl || '';
-          const usableNodeUrl = node.url && node.url !== 'chrome://newtab/' && node.url !== 'about:blank';
-          const usableLiveUrl = liveUrl && liveUrl !== 'chrome://newtab/' && liveUrl !== 'about:blank';
+          const usableNodeUrl = isUsableUrl(node.url);
+          const usableLiveUrl = isUsableUrl(liveUrl);
           const titleOk = node.title && node.title !== 'New Tab' && node.title === live.title;
           const corroborated =
             (usableNodeUrl && node.url === liveUrl) ||              // exact url — strongest
@@ -1075,7 +1084,7 @@ export class ShadowState {
       // to same-origin candidates. The used candidate is spliced from the SHARED
       // bucket (not this filtered view) so a consumed live tab can't be matched twice.
       const savedUrl = savedNode.url || '';
-      const usableUrl = !!savedUrl && savedUrl !== 'chrome://newtab/' && savedUrl !== 'about:blank';
+      const usableUrl = isUsableUrl(savedUrl);
       // Gate title matches by same-origin ONLY when the saved node has a usable url
       // to compare against. A url-less/generic saved node has no origin to verify, so
       // fall back to the pre-#7 title-only recovery (never worse than before) rather
@@ -1129,7 +1138,7 @@ export class ShadowState {
       const isAnchorCorroborated = (node, live) => {
         const liveUrl = live.url || live.pendingUrl || '';
         const nodeUrl = node.url || '';
-        const usableUrl = !!nodeUrl && nodeUrl !== 'chrome://newtab/' && nodeUrl !== 'about:blank';
+        const usableUrl = isUsableUrl(nodeUrl);
         if (usableUrl && nodeUrl === liveUrl) return true; // exact url — strongest
         const titleOk = !!node.title && node.title !== 'New Tab' && node.title === live.title;
         return titleOk && usableUrl && sameOrigin(nodeUrl, liveUrl);
