@@ -102,6 +102,9 @@ describe('moveTabToGroup (4b/A9)', () => {
       tabs: {
         group: mock.fn(async () => 500),
         move: mock.fn(async () => ({})),
+        // Pinned tab 3 can't be grouped, so Chrome reports it ungrouped; all
+        // moved tabs land in the destination window (2).
+        get: mock.fn(async (id) => ({ id, groupId: id === 3 ? -1 : 500, windowId: 2 })),
       },
     };
   });
@@ -131,6 +134,7 @@ describe('moveTabToGroup (4b/A9)', () => {
 
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1, 'groups after the move confirms');
     assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2], 'group() still excludes the pinned tab');
+    assert.equal(state.getTab(3).windowId, 2, 'pinned grandchild windowId repaired from Chrome truth (not left stale in window 1)');
   });
 
   it('groups in place when the target group is untracked in state (defensive default)', async () => {
@@ -162,7 +166,8 @@ describe('moveTabAsChild cross-window group sync (4c/A9)', () => {
         group: mock.fn(async () => 700),
         ungroup: mock.fn(async () => {}),
         move: mock.fn(async () => ({})),
-        get: mock.fn(async (id) => ({ id, groupId: 700, windowId: 2 })),
+        // Pinned tab 3 is moved but not grouped, so Chrome reports it ungrouped.
+        get: mock.fn(async (id) => ({ id, groupId: id === 3 ? -1 : 700, windowId: 2 })),
       },
     };
   });
@@ -180,6 +185,7 @@ describe('moveTabAsChild cross-window group sync (4c/A9)', () => {
     assert.deepEqual(groupCall.tabIds, [1, 2], 'group() still excludes the pinned tab');
     assert.equal(groupCall.groupId, 700);
     assert.equal(globalThis.chrome.tabs.ungroup.mock.callCount(), 0);
+    assert.equal(state.getTab(3).windowId, 2, 'pinned grandchild windowId repaired from Chrome truth (not left stale in window 1)');
     assert.equal(commitState.mock.callCount(), 1);
   });
 
@@ -226,7 +232,8 @@ describe('moveTabBeforeAfter cross-window group sync (4c/A9)', () => {
         group: mock.fn(async () => 700),
         ungroup: mock.fn(async () => {}),
         move: mock.fn(async () => ({})),
-        get: mock.fn(async (id) => ({ id, groupId: 700, windowId: 2 })),
+        // Pinned tab 3 is moved but not grouped, so Chrome reports it ungrouped.
+        get: mock.fn(async (id) => ({ id, groupId: id === 3 ? -1 : 700, windowId: 2 })),
       },
     };
   });
@@ -240,6 +247,7 @@ describe('moveTabBeforeAfter cross-window group sync (4c/A9)', () => {
     assert.deepEqual(globalThis.chrome.tabs.move.mock.calls[0].arguments[0], [1, 2, 3], 'pinned grandchild (3) is physically moved too');
     assert.equal(globalThis.chrome.tabs.group.mock.callCount(), 1);
     assert.deepEqual(globalThis.chrome.tabs.group.mock.calls[0].arguments[0].tabIds, [1, 2], 'group() still excludes the pinned tab');
+    assert.equal(state.getTab(3).windowId, 2, 'pinned grandchild windowId repaired from Chrome truth (not left stale in window 1)');
   });
 });
 

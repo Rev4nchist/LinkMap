@@ -5,7 +5,7 @@
  * DOM building is delegated to tree-renderer.js.
  */
 
-import { MSG } from '../shared/constants.js';
+import { MSG, CRASH_RECOVERY_KEY } from '../shared/constants.js';
 import { generateThemePalette } from '../shared/utils.js';
 import { renderTree } from './modules/tree-renderer.js';
 import { showContextMenu, showGroupContextMenu, hideContextMenu, setContextMenuState } from './modules/context-menu.js';
@@ -116,10 +116,6 @@ homeWindowReady.then(() => {
 // when the panel wasn't open at the time of the one-shot CRASH_RECOVERY
 // message (the normal crash/restart scenario — the panel opens later).
 homeWindowReady.then(checkPersistedCrashRecovery);
-
-// Mirrors the literal in background/sessions.js — not exported from
-// shared/constants.js.
-const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
 
 async function checkPersistedCrashRecovery() {
   try {

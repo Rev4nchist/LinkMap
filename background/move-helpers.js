@@ -107,7 +107,8 @@ export function createMoveHelpers(getState, commitState) {
     const targetGroup = state.groups.get(targetGroupId);
     const groupableIds = collectGroupableTabIds(state, tabId);
 
-    const applyGroup = () => chrome.tabs.group({ tabIds: groupableIds, groupId: targetGroupId })
+    const applyGroup = (repairIds) => chrome.tabs.group({ tabIds: groupableIds, groupId: targetGroupId })
+      .then(() => (repairIds ? repairGroupMembership(repairIds) : undefined))
       .then(() => {
         repositionTabToGroup(tabId, targetGroupId);
         commitState();
@@ -119,7 +120,10 @@ export function createMoveHelpers(getState, commitState) {
     if (sourceTab && targetGroup && sourceTab.windowId !== targetGroup.windowId) {
       const movableIds = collectMovableTabIds(state, tabId);
       chrome.tabs.move(movableIds, { windowId: targetGroup.windowId, index: -1 })
-        .then(applyGroup)
+        // Repair the full moved set (pinned descendants included) from Chrome
+        // truth after the group attempt — else a commit before onAttached fires
+        // persists a stale windowId for a moved-but-not-grouped pinned tab.
+        .then(() => applyGroup(movableIds))
         .catch((err) => {
           console.error('[LinkMap] Cross-window group-header move failed:', err);
         });
@@ -172,22 +176,26 @@ export function createMoveHelpers(getState, commitState) {
     )).then(() => {});
   }
 
-  function syncGroupAfterWindowMove(ids, targetGroupId, wasGrouped) {
+  function syncGroupAfterWindowMove(groupableIds, movableIds, targetGroupId, wasGrouped) {
     if (targetGroupId === undefined) return Promise.resolve();
     let op;
     if (targetGroupId === UNGROUPED_GROUP_ID) {
       if (wasGrouped === undefined || wasGrouped === UNGROUPED_GROUP_ID) return Promise.resolve();
-      op = chrome.tabs.ungroup(ids).catch((err) => {
+      op = chrome.tabs.ungroup(groupableIds).catch((err) => {
         console.error('[LinkMap] Cross-window ungroup failed:', err);
       });
     } else {
-      op = chrome.tabs.group({ tabIds: ids, groupId: targetGroupId }).catch((err) => {
+      op = chrome.tabs.group({ tabIds: groupableIds, groupId: targetGroupId }).catch((err) => {
         console.error('[LinkMap] Cross-window group failed:', err);
       });
     }
-    // Always reconcile membership from Chrome truth before the caller commits,
-    // whether the group/ungroup succeeded or its error was swallowed above.
-    return op.then(() => repairGroupMembership(ids));
+    // Reconcile membership from Chrome truth before the caller commits, whether
+    // the group/ungroup succeeded or its error was swallowed above. Repair the
+    // FULL moved set (movableIds), not just the groupable subset: pinned
+    // descendants are physically moved across the window boundary but never
+    // grouped, so their windowId must still be synced from Chrome truth — else a
+    // commit before onAttached fires persists a stale windowId (CR-move-pinned).
+    return op.then(() => repairGroupMembership(movableIds));
   }
 
   /**
@@ -206,7 +214,7 @@ export function createMoveHelpers(getState, commitState) {
       chrome.tabs.move(movableIds, { windowId: targetWindowId, index: -1 })
         .then(() => {
           getState().moveTab(tabId, parentId, 0);
-          return syncGroupAfterWindowMove(groupableIds, targetGroupId, wasGrouped);
+          return syncGroupAfterWindowMove(groupableIds, movableIds, targetGroupId, wasGrouped);
         })
         .then(() => {
           commitState();
@@ -250,7 +258,7 @@ export function createMoveHelpers(getState, commitState) {
       chrome.tabs.move(movableIds, { windowId: targetWindowId, index: -1 })
         .then(() => {
           getState().moveTab(tabId, parentId, targetIndex);
-          return syncGroupAfterWindowMove(groupableIds, targetGroupId, wasGrouped);
+          return syncGroupAfterWindowMove(groupableIds, movableIds, targetGroupId, wasGrouped);
         })
         .then(() => {
           commitState();

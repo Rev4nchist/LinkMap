@@ -7,15 +7,11 @@
 
 import {
   MSG, SESSIONS_KEY, AUTO_SAVE_INTERVAL_MINUTES, AUTO_ARCHIVE_CHECK_INTERVAL_MINUTES, MAX_AUTO_SAVES,
+  CRASH_RECOVERY_KEY,
 } from '../shared/constants.js';
 
 const AUTO_SAVE_ALARM = 'linkmap-auto-save';
 const AUTO_ARCHIVE_ALARM = 'linkmap-auto-archive';
-
-// Persisted crash-recovery flag — belt-and-suspenders for the case where the
-// side panel isn't open yet when checkForCrashRecovery() fires (F7). Mirrored
-// literal in sidepanel.js (not exported from shared/constants.js).
-const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
 
 /**
  * Creates session management functions.

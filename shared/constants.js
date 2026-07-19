@@ -93,6 +93,12 @@ export const STORAGE_VERSION = 1;
 // valid). See background.js init() and ShadowState#reconcileWithLiveTabs.
 export const SW_SESSION_KEY = 'linkmap_sw_session';
 
+// chrome.storage.local flag persisted by checkForCrashRecovery() so the side
+// panel can surface the recovery banner on its own init even when it wasn't
+// open at SW-init time (the normal crash/restart case). See background/sessions.js
+// and sidepanel/sidepanel.js.
+export const CRASH_RECOVERY_KEY = 'linkmap_crash_recovery';
+
 // Themes — August Suite (10) + Cyberpunk Suite (5)
 export const THEMES = [
   'august-default', 'midnight-mars', 'deep-forest', 'oceanic-depth',

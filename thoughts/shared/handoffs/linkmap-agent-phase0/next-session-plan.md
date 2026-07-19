@@ -3,10 +3,15 @@
 ```yaml
 authored: 2026-07-18 (planning session)
 decided_by: Dave — "A then B (hybrid)": close the stability queue, then run cheap agent spikes if time remains
-basis: 11-agent verification workflow (wf_746966a8-462) — every open item RE-VERIFIED against master @ 8da7578
-       (not the stale branch 743af87 the audit ran on). All 11 confirmed STILL OPEN; file:line re-anchored.
-head: master @ 8da7578, tree clean (only knowledge-tree.json churn)
-tests: node --test from repo root; 474/474 green baseline
+# NOTE: pre_execution_snapshot describes the state BEFORE this session's work.
+# For the CURRENT branch/status see "EXECUTION STATUS" below (branch
+# fix/stability-queue @ ac4f580, 500 tests) — do NOT branch from the snapshot fields.
+pre_execution_snapshot:
+  basis: 11-agent verification workflow (wf_746966a8-462) — every open item RE-VERIFIED against master @ 8da7578
+         (not the stale branch 743af87 the audit ran on). All 11 confirmed STILL OPEN; file:line re-anchored.
+  head: master @ 8da7578, tree clean (only knowledge-tree.json churn)
+  tests: node --test from repo root; 474/474 green baseline
+current_status: see EXECUTION STATUS section — branch fix/stability-queue, 10/11 done, 500 green, PR #9 open
 authoritative_agent_plan: C:\Users\david.hayes\.claude\plans\deep-skipping-stearns.md (elephant-2 gate: agent Phase 1 waits on this queue)
 spike_ledger: docs/agent-integration/DESIGN-RESEARCH.md
 ```
