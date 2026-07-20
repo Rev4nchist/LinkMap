@@ -472,6 +472,54 @@ describe('background.js initialization', () => {
     const stored = chromeMock.storage.local._data.linkmap_workspaces;
     assert.deepEqual(stored.workspaces[0].tabIds, [7], 'surviving same-id tab kept in the workspace');
   });
+
+  // #10 — tab notes are an id-keyed store like workspace membership; remap the same way.
+  const noteState = (id, url) => ({
+    version: 1,
+    tabs: { [id]: { tabId: id, parentId: null, children: [], title: 'GitHub', url, favIconUrl: '', pinned: false, audible: false, status: 'complete', groupId: -1, index: 0, windowId: 1 } },
+    rootIds: [id],
+    collapsed: [],
+    groupColors: {},
+    theme: 'dracula',
+  });
+
+  it("moves a tab note to the tab's new id (tabIdMap)", async () => {
+    chromeMock.storage.local._data.linkmap_tab_notes = { 100: 'my note' };
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 501, active: true })];
+      return [makeChromeTab({ id: 501, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, noteState(100, 'https://github.com'));
+
+    assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 501: 'my note' }, "note moved to the tab's new id");
+  });
+
+  it('drops a tab note whose id was recycled by an unrelated tab on cold restart', async () => {
+    chromeMock.storage.local._data.linkmap_tab_notes = { 42: 'inbox note' };
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 42, active: true })];
+      return [makeChromeTab({ id: 42, title: 'Evil', url: 'https://evil.example/x', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, noteState(42, 'https://mail.example/inbox'));
+
+    assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, {}, 'note dropped, not aliased to the unrelated recycled tab');
+  });
+
+  it('keeps a tab note whose tab survived reconcile at its own id (sameIdMatched)', async () => {
+    chromeMock.storage.local._data.linkmap_tab_notes = { 7: 'kept note' };
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 7, active: true })];
+      return [makeChromeTab({ id: 7, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, noteState(7, 'https://github.com'));
+
+    assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 7: 'kept note' }, 'note kept for the surviving same-id tab');
+  });
 });
 
 // ---------------------------------------------------------------------------

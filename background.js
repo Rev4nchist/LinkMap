@@ -240,6 +240,30 @@ async function init() {
     const notesResult = await chrome.storage.local.get(TAB_NOTES_KEY);
     ctx.tabNotes = notesResult[TAB_NOTES_KEY] || {};
 
+    // #10: tab notes are another id-keyed store outside the tree (like workspace
+    // membership at F8) — reconcileWithLiveTabs() never touched them. Remap the
+    // SAME way: move a note to the tab's new id (tabIdMap), keep it if the tab
+    // survived at its own id (sameIdMatched), and drop it otherwise (tab closed, or
+    // its id was recycled by a DIFFERENT tab on cold restart — keeping it would
+    // surface a stale note on the wrong tab).
+    let notesChanged = false;
+    const remappedNotes = {};
+    for (const [key, note] of Object.entries(ctx.tabNotes)) {
+      const id = Number(key);
+      if (tabIdMap.has(id)) {
+        remappedNotes[tabIdMap.get(id)] = note;
+        notesChanged = true;
+      } else if (sameIdMatched.has(id)) {
+        remappedNotes[id] = note;
+      } else {
+        notesChanged = true; // dropped — tab closed or its id was recycled
+      }
+    }
+    if (notesChanged) {
+      ctx.tabNotes = remappedNotes;
+      chrome.storage.local.set({ [TAB_NOTES_KEY]: ctx.tabNotes });
+    }
+
     console.log(`[LinkMap] Initialized with ${context.state.tabs.size} tabs, ${context.state.groups.size} groups`);
   } catch (err) {
     console.error('[LinkMap] Init error:', err);
