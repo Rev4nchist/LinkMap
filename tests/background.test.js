@@ -533,6 +533,23 @@ describe('background.js initialization', () => {
 
     assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 7: 'padded note' }, 'non-canonical key canonicalized and persisted');
   });
+
+  it('does not re-persist notes when nothing changed (canonical keys, all survive)', async () => {
+    chromeMock.storage.local._data.linkmap_tab_notes = { 7: 'kept note' };
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 7, active: true })];
+      return [makeChromeTab({ id: 7, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, noteState(7, 'https://github.com'));
+
+    const noteWrites = chromeMock.storage.local.set.mock.calls.filter(
+      (c) => c.arguments[0] && Object.prototype.hasOwnProperty.call(c.arguments[0], 'linkmap_tab_notes'),
+    );
+    assert.equal(noteWrites.length, 0, 'no notes write when nothing changed (notesChanged stayed false)');
+    assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 7: 'kept note' }, 'note left as-is');
+  });
 });
 
 // ---------------------------------------------------------------------------
