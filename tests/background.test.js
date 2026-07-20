@@ -520,6 +520,19 @@ describe('background.js initialization', () => {
 
     assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 7: 'kept note' }, 'note kept for the surviving same-id tab');
   });
+
+  it('canonicalizes a non-canonical note key for a surviving tab', async () => {
+    chromeMock.storage.local._data.linkmap_tab_notes = { '07': 'padded note' };
+    delete chromeMock.storage.session._data[SW_SESSION_KEY];
+    chromeMock.tabs.query = mock.fn(async (queryInfo) => {
+      if (queryInfo && queryInfo.active) return [makeChromeTab({ id: 7, active: true })];
+      return [makeChromeTab({ id: 7, title: 'GitHub', url: 'https://github.com', index: 0 })];
+    });
+
+    await loadBackground(chromeMock, noteState(7, 'https://github.com'));
+
+    assert.deepEqual(chromeMock.storage.local._data.linkmap_tab_notes, { 7: 'padded note' }, 'non-canonical key canonicalized and persisted');
+  });
 });
 
 // ---------------------------------------------------------------------------
